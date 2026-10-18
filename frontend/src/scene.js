@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-// Física (x, y, z) con z vertical  ->  Three (x, z, -y) con y vertical. Es una rotación propia.
 const V = (x, y, z, k = 1) => new THREE.Vector3(x * k, z * k, -y * k);
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -59,7 +58,7 @@ export class SynchrotronScene {
     this.controls.dampingFactor = 0.08;
     this.ring = new THREE.Group();
     this.scene.add(this.ring);
-    this.layers = {};          // nombre -> objeto(s) conmutables
+    this.layers = {};
     this.vis = { trail: true, v: true, p: true, B: true, E: true, rad: true, magnets: true, cavity: true, ref: true, axes: true, grid: true };
     this.k = 1;
     this.maxPoints = 0;
@@ -76,16 +75,18 @@ export class SynchrotronScene {
     this.camera.updateProjectionMatrix();
   }
 
-  // ----------------------------------------------------------- partícula y vectores
   _buildParticle() {
     const g = this.particle = new THREE.Group();
+    // Partícula luminosa (esfera blanca + sprite de brillo aditivo)
     const core = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16),
       new THREE.MeshBasicMaterial({ color: 0xffffff, depthWrite: false }));
+    core.renderOrder = 20;
+    g.add(core);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, blending: THREE.AdditiveBlending,
       transparent: true, depthWrite: false }));
     glow.scale.set(1.5, 1.5, 1);
-    core.renderOrder = 20; glow.renderOrder = 19;
-    g.add(core, glow);
+    glow.renderOrder = 19;
+    g.add(glow);
     this.scene.add(g);
 
     const arrow = (color) => {
@@ -95,11 +96,13 @@ export class SynchrotronScene {
       this.scene.add(a);
       return a;
     };
-    this.arrows = { v: arrow(COLORS.v), p: arrow(COLORS.p), B: arrow(COLORS.B), E: arrow(COLORS.E), rad: arrow(COLORS.rad) };
+    this.arrows = { v: arrow(COLORS.v), p: arrow(COLORS.p), B: arrow(COLORS.B), E: arrow(COLORS.E) };
 
-    // Cono de emisión de sincrotrón: eje a lo largo de v, semiángulo ~ 1/γ (ángulo dibujado con mínimo visible)
-    this.cone = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 32, 1, true),
-      new THREE.MeshBasicMaterial({ color: COLORS.rad, transparent: true, opacity: 0.22, side: THREE.DoubleSide,
+    this.beamlinesGroup = new THREE.Group();
+    this.scene.add(this.beamlinesGroup);
+
+    this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.8, 1.8, 16, 1, true),
+      new THREE.MeshBasicMaterial({ color: COLORS.rad, transparent: true, opacity: 0.35, side: THREE.DoubleSide,
         depthWrite: false, blending: THREE.AdditiveBlending }));
     this.cone.renderOrder = 17;
     this.scene.add(this.cone);
@@ -113,19 +116,18 @@ export class SynchrotronScene {
     a.setLength(len, Math.min(0.55, len * 0.28), Math.min(0.3, len * 0.15));
   }
 
-  // ------------------------------------------------------------------- anillo
   buildRing(cfg) {
-    // cfg: R, aR, aZ, nMag, gap, thetaC, bSign, maxPoints
     this.ring.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.scene.remove(this.ring);
     this.ring = new THREE.Group();
     this.scene.add(this.ring);
 
-    const k = this.k = 10 / cfg.R;                 // R de referencia = 10 unidades de escena
+    this.beamlinesGroup.clear();
+
+    const k = this.k = 10 / cfg.R;
     const rc = cfg.R * k, ra = cfg.aR * k, az = cfg.aZ * k;
     const L = {};
 
-    // Cámara de vacío (transparente) + carcasa azulada exterior
     const chamber = new THREE.Group();
     const wall = (r, h) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 160, 1, true), translucent(0x3a78c4, 0.13));
     chamber.add(wall(rc + ra, 2 * az), wall(rc - ra, 2 * az));
@@ -141,12 +143,11 @@ export class SynchrotronScene {
     }
     L.chamber = [chamber, casing];
 
-    // Órbita de referencia (guía visual; la trayectoria cian sale de las ecuaciones)
     L.ref = [circle(rc, 0, 0xc060ff, 0.55)];
 
-    // Imanes de curvatura: sectores superior e inferior (el campo del modelo es continuo; los huecos son sólo visuales)
     const magnets = new THREE.Group();
     const rIn = rc - 1.7 * ra, rOut = rc + 1.7 * ra, thick = 1.1 * az, gapA = 0.025;
+
     for (const top of [true, false]) {
       for (let i = 0; i < cfg.nMag; i++) {
         const a0 = (i / cfg.nMag) * Math.PI * 2 + gapA, a1 = ((i + 1) / cfg.nMag) * Math.PI * 2 - gapA;
@@ -163,24 +164,59 @@ export class SynchrotronScene {
     }
     L.magnets = [magnets];
 
-    // Cavidad RF: losa verde azulada con aristas naranjas, en el azimut de la cavidad
+    // BEAMLINES (Haces de luz)
+    this.beamlineMeshes = [];
+    const numBeamlines = 8;
+    for (let i = 0; i < numBeamlines; i++) {
+        const geoAngle = (i / numBeamlines) * Math.PI * 2;
+        
+        const startX = rc * Math.cos(geoAngle);
+        const startZ = -rc * Math.sin(geoAngle);
+        
+        const tanX = -Math.sin(geoAngle);
+        const tanZ = -Math.cos(geoAngle);
+
+        const beamLength = rc * 0.6;
+        
+        const beamGeo = new THREE.CylinderGeometry(0.04, 0.08, beamLength, 8, 1, true);
+        beamGeo.rotateX(Math.PI / 2);
+        const beamMat = new THREE.MeshBasicMaterial({
+            color: COLORS.rad,
+            transparent: true,
+            opacity: 0.15,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const beamMesh = new THREE.Mesh(beamGeo, beamMat);
+        beamMesh.position.set(startX + tanX * (beamLength / 2), 0, startZ + tanZ * (beamLength / 2));
+        beamMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(tanX, 0, tanZ));
+        this.beamlinesGroup.add(beamMesh);
+
+        const hutchGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+        const hutchMesh = new THREE.Mesh(hutchGeo, translucent(0x60a5fa, 0.5));
+        hutchMesh.position.set(startX + tanX * beamLength, 0, startZ + tanZ * beamLength);
+        this.beamlinesGroup.add(hutchMesh);
+
+        const originPos = new THREE.Vector3(startX, 0, startZ);
+        this.beamlineMeshes.push({ mesh: beamMesh, origin: originPos });
+    }
+
     const cav = new THREE.Group();
     const box = new THREE.BoxGeometry(2 * ra * 2.0, 2 * az * 2.0, Math.max(cfg.gap * k, 0.3));
     cav.add(new THREE.Mesh(box, translucent(0x22d3a6, 0.22)));
     cav.add(new THREE.LineSegments(new THREE.EdgesGeometry(box),
       new THREE.LineBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.95, depthWrite: false })));
     cav.position.set(rc * Math.cos(cfg.thetaC), 0, -rc * Math.sin(cfg.thetaC));
-    cav.rotation.y = cfg.thetaC;                    // x local = radial, z local = tangente (con signo)
+    cav.rotation.y = cfg.thetaC;
     const cl = label('RF', '#22d3a6'); cl.position.set(0, 2 * az + 1.2, 0); cav.add(cl);
     L.cavity = [cav];
 
-    // Flechas de campo B de fondo (como en la imagen de referencia)
     const bArrows = new THREE.Group();
-    const top = 1.25 * az + thick + 0.25;
+    const topY = 1.25 * az + thick + 0.25;
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
       const dir = new THREE.Vector3(0, cfg.bSign, 0);
-      const y0 = cfg.bSign > 0 ? top : top + 2.4;
+      const y0 = cfg.bSign > 0 ? topY : topY + 2.4;
       const ar = new THREE.ArrowHelper(dir, new THREE.Vector3(rc * Math.cos(a), y0, -rc * Math.sin(a)), 2.4, COLORS.B, 0.6, 0.3);
       ar.line.material = new THREE.LineBasicMaterial({ color: COLORS.B, transparent: true, opacity: 0.8 });
       ar.cone.material = new THREE.MeshBasicMaterial({ color: COLORS.B, transparent: true, opacity: 0.9 });
@@ -188,7 +224,6 @@ export class SynchrotronScene {
     }
     L.Bfield = [bArrows];
 
-    // Ejes y cuadrícula
     const axes = new THREE.Group();
     const axis = (to, color, text) => {
       axes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), to]),
@@ -208,11 +243,9 @@ export class SynchrotronScene {
     for (const key of Object.keys(L)) for (const o of L[key]) this.ring.add(o);
     this.layers = L;
 
-    // Trayectoria (estela visual construida punto a punto)
     this.setTrail(cfg.maxPoints);
     for (const key of ['chamber', 'ref', 'magnets', 'cavity', 'Bfield', 'axes', 'grid']) this._applyVis(key);
 
-    // Cámara
     this.camera.position.set(rc * 1.15, rc * 0.95, rc * 1.5);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
@@ -240,7 +273,6 @@ export class SynchrotronScene {
   commitTrail() { this.trail.geometry.attributes.position.needsUpdate = true; }
   setTrailCount(n) { this.trail.geometry.setDrawRange(0, Math.min(n, this.maxPoints)); }
 
-  // -------------------------------------------------------------- visibilidad
   _applyVis(key) {
     const map = { magnets: 'magnets', cavity: 'cavity', ref: 'ref', axes: 'axes', grid: 'grid', chamber: null, Bfield: 'B' };
     const flag = map[key] === null ? true : this.vis[map[key]];
@@ -252,8 +284,6 @@ export class SynchrotronScene {
     for (const k of ['magnets', 'cavity', 'ref', 'axes', 'grid', 'Bfield']) this._applyVis(k);
   }
 
-  // ---------------------------------------------------------------- partícula
-  // d: punto del historial (diccionario campo -> valor), info: datos derivados
   setParticle(d, info) {
     const k = this.k;
     const pos = V(d.x, d.y, d.z, k);
@@ -261,7 +291,7 @@ export class SynchrotronScene {
 
     const v = V(d.vx, d.vy, d.vz);
     const vhat = v.clone().normalize();
-    const side = new THREE.Vector3(0, 0.28, 0);               // desplaza p respecto a v (son paralelos)
+    const side = new THREE.Vector3(0, 0.28, 0);
     const beta = v.length() / 299792458;
 
     this._setArrow(this.arrows.v, v, this.vis.v ? 2.2 * beta : 0, pos);
@@ -275,16 +305,27 @@ export class SynchrotronScene {
     const em = Ev.length();
     this._setArrow(this.arrows.E, Ev, this.vis.E && em > 0 ? 3.0 : 0, pos);
 
-    // Emisión: dirección = v̂, semiángulo real 1/γ (dibujado con un mínimo para que sea visible)
     const showRad = this.vis.rad && d.power_W > 0;
-    this._setArrow(this.arrows.rad, vhat, showRad ? 4.2 : 0, pos);
     this.cone.visible = showRad;
+
     if (showRad) {
-      const Lc = 3.2;
+      const Lc = 2.5;
       const ang = Math.max(1 / d.gamma, 0.07);
       this.cone.scale.set(Lc * Math.tan(ang), Lc, Lc * Math.tan(ang));
-      this.cone.quaternion.setFromUnitVectors(UP, vhat.clone().negate());   // vértice en la partícula, base hacia delante
+      this.cone.quaternion.setFromUnitVectors(UP, vhat.clone().negate());
       this.cone.position.copy(pos).add(vhat.clone().multiplyScalar(Lc / 2));
+    }
+
+    if (this.beamlineMeshes) {
+      for (const bm of this.beamlineMeshes) {
+        const dist = pos.distanceTo(bm.origin);
+        if (showRad && dist < 1.5) {
+          const intensity = 1.0 - (dist / 1.5);
+          bm.mesh.material.opacity = 0.15 + 0.85 * intensity;
+        } else {
+          bm.mesh.material.opacity = 0.15;
+        }
+      }
     }
   }
 
