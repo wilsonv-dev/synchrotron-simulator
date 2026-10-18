@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sincrotrón 3D — Fase 1</title>
+  <script type="module" crossorigin src="/assets/index-D-lSHOr9.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-BXEX4O4h.css">
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <aside id="panel" class="glass">
+    <h1>Sincrotrón · una partícula</h1>
+    <form id="form" autocomplete="off"></form>
+    <button id="apply" class="primary" type="button">Aplicar y reiniciar</button>
+    <h2>Capas visibles</h2>
+    <div id="toggles"></div>
+    <h2>Parámetros derivados</h2>
+    <dl id="derived"></dl>
+  </aside>
+
+  <section id="hud" class="glass">
+    <div id="status" class="status ok">Confinada</div>
+    <dl id="telemetry"></dl>
+    <details id="inspector"><summary>Inspeccionar punto</summary><table id="point"></table></details>
+  </section>
+
+  <div id="banner" class="glass" hidden></div>
+
+  <footer id="bar" class="glass">
+    <button id="play" class="primary" title="Espacio">Reproducir</button>
+    <button id="step" title="Flecha derecha">Paso +1</button>
+    <button id="reset" title="R">Reiniciar</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1" />
+    <span id="scrubLabel">punto 0</span>
+    <label class="speed">Animación
+      <input id="speed" type="range" min="0" max="100" value="55" />
+    </label>
+    <span id="speedLabel"></span>
+  </footer>
+
+</body>
+</html>
