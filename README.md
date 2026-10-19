@@ -1,4 +1,4 @@
-# Simulador 3D de sincrotrón — Fase 3 (interacciones entre partículas)
+# Simulador 3D de sincrotrón
 
 ## Backend (Python)
     cd backend
