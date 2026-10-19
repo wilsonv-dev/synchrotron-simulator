@@ -1,5 +1,6 @@
 """Pruebas del motor físico: movimiento rectilíneo, curvatura magnética, energía, convergencia,
-órbita de referencia, pérdida de confinamiento, radiación y API."""
+órbita de referencia, pérdida de confinamiento, radiación y API (modo de una partícula).
+Las pruebas de varias partículas y bunches están en test_multi.py."""
 import math
 
 import numpy as np

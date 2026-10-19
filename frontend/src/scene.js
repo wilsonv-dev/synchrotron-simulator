@@ -22,6 +22,20 @@ function glowTexture() {
   return new THREE.CanvasTexture(c);
 }
 
+// Textura blanca neutra: multiplicada por el color de cada vértice da puntos del color asignado
+function dotTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.35, 'rgba(255,255,255,0.85)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
 function label(text, color) {
   const c = document.createElement('canvas');
   c.width = 160; c.height = 64;
@@ -63,6 +77,7 @@ export class SynchrotronScene {
     this.k = 1;
     this.maxPoints = 0;
     this.glowTex = glowTexture();
+    this.dotTex = dotTexture();
     this._buildParticle();
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -273,6 +288,233 @@ export class SynchrotronScene {
   commitTrail() { this.trail.geometry.attributes.position.needsUpdate = true; }
   setTrailCount(n) { this.trail.geometry.setDrawRange(0, Math.min(n, this.maxPoints)); }
 
+  // ------------------------------------------------- varias partículas (modos multi y bunch)
+  // Cada trayectoria es UNA línea con un buffer preasignado (no un objeto por punto); todos los
+  // puntos luminosos comparten UNA geometría de Points. Los datos son posiciones calculadas por
+  // el motor de Python; aquí sólo se representan.
+  initMulti(defs, maxPoints, opts = {}) {
+    this.clearMulti();
+    const n = defs.length;
+    const group = new THREE.Group();
+    const m = this.multi = {
+      n, maxPoints, group, defs: defs.map((d) => ({ ...d })),
+      count: new Int32Array(n), lastValid: new Int32Array(n).fill(-1), lines: [],
+      selected: -1, envelope: opts.envelope || 'none', envColor: opts.envColor || '#ffb84d',
+    };
+    for (const d of m.defs) {
+      const buf = new Float32Array(maxPoints * 3);
+      const geo = new THREE.BufferGeometry();
+      const attr = new THREE.BufferAttribute(buf, 3);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('position', attr);
+      geo.setDrawRange(0, 0);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: d.color, transparent: true, opacity: d.trail_opacity, depthWrite: false }));
+      line.frustumCulled = false;
+      line.renderOrder = 14;
+      group.add(line);
+      m.lines.push({ line, buf });
+    }
+    // Puntos luminosos: núcleo + halo aditivo, ambos sobre la misma geometría
+    m.dotPos = new Float32Array(n * 3);
+    m.dotCol = new Float32Array(n * 3);
+    const dg = new THREE.BufferGeometry();
+    dg.setAttribute('position', new THREE.BufferAttribute(m.dotPos, 3).setUsage(THREE.DynamicDrawUsage));
+    dg.setAttribute('color', new THREE.BufferAttribute(m.dotCol, 3).setUsage(THREE.DynamicDrawUsage));
+    dg.setDrawRange(0, 0);
+    // halo aditivo tenue + núcleo con mezcla normal: aunque muchas partículas se superpongan
+    // (bunch), conservan su color en vez de saturar a blanco
+    const pts = (size, opacity, blending, order) => {
+      const p = new THREE.Points(dg, new THREE.PointsMaterial({ size, map: this.dotTex, vertexColors: true,
+        transparent: true, opacity, depthWrite: false, blending, sizeAttenuation: true }));
+      p.frustumCulled = false;
+      p.renderOrder = order;
+      return p;
+    };
+    m.dotGeo = dg;
+    group.add(pts(0.6, 0.22, THREE.AdditiveBlending, 15), pts(0.2, 1.0, THREE.NormalBlending, 16));
+    // Marcador de la partícula inspeccionada (anillo fino que no tapa la escena)
+    m.marker = new THREE.Mesh(new THREE.RingGeometry(0.26, 0.31, 32),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }));
+    m.marker.renderOrder = 17;
+    group.add(m.marker);
+    // Envolvente del bunch: malla translúcida que se recalcula a partir de las posiciones
+    if (m.envelope !== 'none') this._buildEnvelope(m);
+    this.scene.add(group);
+    // En este modo la partícula blanca del modo single no se usa; las flechas siguen a la seleccionada
+    this.particle.visible = false;
+    this.trail.visible = false;
+    // Bordes de imanes y cavidad por encima de los halos, para que nunca queden ocultos
+    for (const key of ['magnets', 'cavity']) {
+      for (const o of this.layers[key] || []) o.traverse((c) => { if (c.isLineSegments) c.renderOrder = 22; });
+    }
+  }
+
+  clearMulti() {
+    const m = this.multi;
+    if (!m) return;
+    this.scene.remove(m.group);
+    m.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    this.multi = null;
+    this.particle.visible = true;
+    this.trail.visible = this.vis.trail;
+    for (const key of ['magnets', 'cavity']) {
+      for (const o of this.layers[key] || []) o.traverse((c) => { if (c.isLineSegments) c.renderOrder = 0; });
+    }
+  }
+
+  // Añade posiciones [x0,y0,z0,x1,...] (m, coordenadas físicas) de la partícula k desde el índice first
+  appendPositions(k, first, flat) {
+    const m = this.multi;
+    if (!m || !flat.length) return;
+    const { buf, line } = m.lines[k];
+    const n = Math.min(flat.length / 3, m.maxPoints - first);
+    for (let j = 0; j < n; j++) {
+      const o = 3 * (first + j);
+      buf[o] = flat[3 * j] * this.k; buf[o + 1] = flat[3 * j + 2] * this.k; buf[o + 2] = -flat[3 * j + 1] * this.k;
+    }
+    m.count[k] = Math.max(m.count[k], first + n);
+    line.geometry.attributes.position.needsUpdate = true;
+  }
+
+  setLastValid(k, idx) { if (this.multi) this.multi.lastValid[k] = idx ?? -1; }
+
+  setMultiStyle(k, style) {
+    const m = this.multi;
+    if (!m) return;
+    Object.assign(m.defs[k], style);
+    const mat = m.lines[k].line.material;
+    mat.color.set(m.defs[k].color);
+    mat.opacity = m.defs[k].trail_opacity;
+  }
+
+  setSelected(k) { if (this.multi) this.multi.selected = k; }
+
+  // Coloca puntos y recorta trayectorias en el índice temporal i (reloj común)
+  setMultiCursor(i) {
+    const m = this.multi;
+    if (!m) return;
+    const col = new THREE.Color();
+    let nDots = 0;
+    m.marker.visible = false;
+    m.alive = [];
+    for (let k = 0; k < m.n; k++) {
+      const d = m.defs[k];
+      const lastAvail = m.count[k] - 1;
+      const lost = m.lastValid[k] >= 0;
+      const j = Math.min(i, lost ? m.lastValid[k] : lastAvail, lastAvail);
+      const { line, buf } = m.lines[k];
+      line.geometry.setDrawRange(0, j + 1);
+      line.visible = this.vis.trail && d.trail_visible && j >= 1;
+      if (j < 0 || (lost && i > m.lastValid[k])) continue;           // partícula ya fuera de la cámara
+      m.alive.push(k);
+      if (!d.visible) continue;
+      m.dotPos[3 * nDots] = buf[3 * j]; m.dotPos[3 * nDots + 1] = buf[3 * j + 1]; m.dotPos[3 * nDots + 2] = buf[3 * j + 2];
+      col.set(d.color);
+      m.dotCol[3 * nDots] = col.r; m.dotCol[3 * nDots + 1] = col.g; m.dotCol[3 * nDots + 2] = col.b;
+      nDots++;
+      if (k === m.selected) {
+        m.marker.visible = true;
+        m.marker.position.set(buf[3 * j], buf[3 * j + 1], buf[3 * j + 2]);
+        m.marker.quaternion.copy(this.camera.quaternion);
+      }
+    }
+    m.dotGeo.setDrawRange(0, nDots);
+    m.dotGeo.attributes.position.needsUpdate = true;
+    m.dotGeo.attributes.color.needsUpdate = true;
+    if (m.env) this._updateEnvelope(m, i);
+  }
+
+  setEnvelopeMode(mode, color) {
+    const m = this.multi;
+    if (!m) return;
+    m.envelope = mode;
+    if (color) {
+      m.envColor = color;
+      if (m.env) { m.env.mesh.material.color.set(color); m.env.mesh.children[0].material.color.set(color); }
+    }
+    if (mode !== 'none' && !m.env) this._buildEnvelope(m);
+    if (m.env) m.env.mesh.visible = mode !== 'none';
+  }
+
+  // Envolvente: tubo curvo a lo largo del arco, centrado en la media y con semiejes ±2σ (radial y
+  // vertical) de las partículas confinadas; su longitud cubre ±2σ en azimut. Sólo es una
+  // representación de la distribución calculada, no un objeto físico.
+  _buildEnvelope(m) {
+    const K = 48, M = 20;
+    const pos = new Float32Array((K + 1) * M * 3);
+    const idx = [];
+    for (let a = 0; a < K; a++) {
+      for (let b = 0; b < M; b++) {
+        const p0 = a * M + b, p1 = a * M + (b + 1) % M, p2 = (a + 1) * M + b, p3 = (a + 1) * M + (b + 1) % M;
+        idx.push(p0, p2, p1, p1, p2, p3);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: m.envColor, transparent: true,
+      opacity: 0.2, depthWrite: false, side: THREE.DoubleSide }));
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 13;
+    // contorno: anillos y generatrices que comparten el mismo buffer de posiciones
+    const lidx = [];
+    for (let a = 0; a <= K; a++) {
+      for (let b = 0; b < M; b++) {
+        if (a % 6 === 0) lidx.push(a * M + b, a * M + (b + 1) % M);
+        if (a < K && b % 5 === 0) lidx.push(a * M + b, (a + 1) * M + b);
+      }
+    }
+    const lgeo = new THREE.BufferGeometry();
+    lgeo.setAttribute('position', geo.attributes.position);
+    lgeo.setIndex(lidx);
+    const wire = new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({
+      color: m.envColor, transparent: true, opacity: 0.35, depthWrite: false }));
+    wire.frustumCulled = false;
+    mesh.add(wire);
+    m.group.add(mesh);
+    m.env = { mesh, pos, K, M };
+  }
+
+  _updateEnvelope(m, i) {
+    const { mesh, pos, K, M } = m.env;
+    const alive = m.alive || [];
+    mesh.visible = m.envelope !== 'none' && alive.length >= 2;
+    if (!mesh.visible) return;
+    // estadística en coordenadas cilíndricas (θ, r, z) a partir de las posiciones del motor
+    let sx = 0, sy = 0;
+    const th = [], rr = [], zz = [];
+    for (const k of alive) {
+      const buf = m.lines[k].buf;
+      const j = Math.min(i, m.count[k] - 1);
+      const X = buf[3 * j], Y = buf[3 * j + 1], Z = buf[3 * j + 2];
+      const t = Math.atan2(-Z, X);
+      th.push(t); rr.push(Math.hypot(X, Z)); zz.push(Y);
+      sx += Math.cos(t); sy += Math.sin(t);
+    }
+    const n = th.length, tc = Math.atan2(sy, sx);
+    const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    const mean = (a) => a.reduce((s, v) => s + v, 0) / n;
+    const std = (a, mu) => Math.sqrt(a.reduce((s, v) => s + (v - mu) ** 2, 0) / n);
+    const dth = th.map((t) => wrap(t - tc));
+    const mt = mean(dth), mr = mean(rr), mz = mean(zz);
+    const halfT = Math.min(Math.PI, 2 * std(dth, mt) + 0.01);
+    const ar = Math.max(2 * std(rr, mr), 0.03), az = Math.max(2 * std(zz, mz), 0.03);
+    for (let a = 0; a <= K; a++) {
+      const u = -1 + (2 * a) / K;
+      const prof = Math.sqrt(Math.max(0, 1 - u * u));               // ±2σ: elipsoide curvado
+      const t = tc + mt + u * halfT;
+      const c = Math.cos(t), s = Math.sin(t);
+      for (let b = 0; b < M; b++) {
+        const phi = (2 * Math.PI * b) / M;
+        const r = mr + ar * prof * Math.cos(phi), y = mz + az * prof * Math.sin(phi);
+        const o = 3 * (a * M + b);
+        pos[o] = r * c; pos[o + 1] = y; pos[o + 2] = -r * s;
+      }
+    }
+    mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
   _applyVis(key) {
     const map = { magnets: 'magnets', cavity: 'cavity', ref: 'ref', axes: 'axes', grid: 'grid', chamber: null, Bfield: 'B' };
     const flag = map[key] === null ? true : this.vis[map[key]];
@@ -280,8 +522,13 @@ export class SynchrotronScene {
   }
   setVisible(name, on) {
     this.vis[name] = on;
-    if (name === 'trail') this.trail.visible = on;
+    if (name === 'trail') this.trail.visible = on && !this.multi;
     for (const k of ['magnets', 'cavity', 'ref', 'axes', 'grid', 'Bfield']) this._applyVis(k);
+  }
+
+  hideVectors() {
+    for (const a of Object.values(this.arrows)) a.visible = false;
+    this.cone.visible = false;
   }
 
   setParticle(d, info) {

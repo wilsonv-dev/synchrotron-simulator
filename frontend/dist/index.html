@@ -3,27 +3,62 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sincrotrón 3D — Fase 1</title>
-  <script type="module" crossorigin src="/assets/index-BO0h-oul.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-BXEX4O4h.css">
+  <title>Sincrotrón 3D</title>
+  <script type="module" crossorigin src="/assets/index-B8nEJsHR.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-C0hzpu7J.css">
 </head>
 <body>
   <canvas id="view"></canvas>
 
   <aside id="panel" class="glass">
-    <h1>Sincrotrón · una partícula</h1>
+    <h1 id="title">Sincrotrón · una partícula</h1>
+    <label class="mode-select">Modo de simulación
+      <select id="mode">
+        <option value="single">Partícula individual</option>
+        <option value="multi">Múltiples partículas</option>
+        <option value="bunch">Bunch de partículas</option>
+      </select>
+    </label>
+    <label class="check" id="interactionsBox" hidden><input type="checkbox" id="interactions">
+      Interacciones de Coulomb entre partículas</label>
+    <p id="interactionNote" class="note" hidden></p>
+    <h2 id="formTitle">Parámetros</h2>
     <form id="form" autocomplete="off"></form>
+    <section id="multiPanel" hidden>
+      <h2>Partículas <span id="pcount"></span></h2>
+      <div id="pcards"></div>
+      <div class="row-buttons">
+        <button id="addParticle" type="button">+ Añadir</button>
+        <button id="restoreParticles" type="button">Restaurar configuración inicial</button>
+      </div>
+    </section>
+    <section id="bunchPanel" hidden>
+      <h2>Bunch de partículas</h2>
+      <div id="bunchForm"></div>
+      <div class="row-buttons">
+        <button id="newSeed" type="button">Nueva semilla aleatoria</button>
+        <button id="restoreBunch" type="button">Restaurar configuración inicial</button>
+      </div>
+    </section>
     <button id="apply" class="primary" type="button">Aplicar y reiniciar</button>
     <h2>Capas visibles</h2>
     <div id="toggles"></div>
     <h2>Parámetros derivados</h2>
     <dl id="derived"></dl>
+    <div id="derivedExtra"></div>
   </aside>
 
   <section id="hud" class="glass">
     <div id="status" class="status ok">Confinada</div>
     <dl id="telemetry"></dl>
     <details id="inspector"><summary>Inspeccionar punto</summary><table id="point"></table></details>
+  </section>
+
+  <section id="legend" class="glass" hidden>
+    <div class="legend-head"><b>Leyenda</b><span id="legendCount"></span></div>
+    <div class="legend-cols"><span>vis.</span><span>tray.</span><span></span><span>id · especie · carga</span></div>
+    <div id="legendList"></div>
+    <p id="legendNote" class="note"></p>
   </section>
 
   <div id="banner" class="glass" hidden></div>

@@ -1,4 +1,4 @@
-"""Motor físico relativista de UNA partícula cargada (unidades SI).
+"""Motor físico relativista de partículas cargadas (unidades SI).
 
 Ecuaciones resueltas (nada de órbitas impuestas):
 
@@ -17,6 +17,17 @@ Modelo de campos (ver SynchrotronFields):
     (dipolos contiguos, curvatura distribuida). Fuera de la cámara B = 0.
   * Cavidad RF: campo eléctrico tangencial E(s,t) = V0/L · w(s) · sin(ωt + φ) en un
     hueco corto de longitud L en el azimut de la cavidad, con perfil suave w (ventana de Hann).
+
+Varias partículas: las funciones *_batch aplican exactamente las mismas ecuaciones a N
+partículas a la vez (arrays de forma (N, 3)), cada una con su propia carga y masa. Por defecto
+las partículas sólo ven los campos externos.
+
+Interacciones (opcionales): fuerza electrostática de Coulomb instantánea entre pares,
+    F_i = Σ_{j≠i} k q_i q_j (x_i - x_j) / |x_i - x_j|³,   k = 1/(4π ε0),
+que se suma a q(E + v×B) en la patada del integrador. Es una APROXIMACIÓN: no incluye el campo
+magnético de las propias partículas, el retardo ni la radiación entre ellas (no es una solución de
+Liénard-Wiechert). Para cargas que viajan juntas con factor γ, la fuerza neta real en el laboratorio
+es ~1/γ² de la de Coulomb, de modo que este modelo la sobreestima para haces relativistas.
 """
 from __future__ import annotations
 
@@ -26,7 +37,7 @@ from typing import Callable, Tuple
 
 import numpy as np
 
-from .constants import C, E_CHARGE, EPS0, M_ELECTRON, M_PROTON
+from .constants import AMU, C, E_CHARGE, EPS0, K_COULOMB, M_ELECTRON, M_PROTON
 
 Vec = np.ndarray
 FieldFn = Callable[[Vec, float], Tuple[Vec, Vec]]  # (x, t) -> (E, B)
@@ -44,6 +55,11 @@ SPECIES = {
     "positron": Species("positron", +E_CHARGE, M_ELECTRON),
     "proton": Species("proton", +E_CHARGE, M_PROTON),
 }
+
+
+def ion_species(charge_state: int, mass_u: float) -> Species:
+    """Ion configurable: carga Z·e y masa en unidades de masa atómica."""
+    return Species(f"ion({charge_state:+d}, {mass_u:g} u)", charge_state * E_CHARGE, mass_u * AMU)
 
 
 # ----------------------------------------------------------------------------
@@ -134,6 +150,120 @@ def boris_step(x: Vec, p: Vec, t: float, dt: float, q: float, m: float,
 
 
 # ----------------------------------------------------------------------------
+# Versiones para N partículas (mismas ecuaciones; q y m son arrays de forma (N,))
+# ----------------------------------------------------------------------------
+def _dot_rows(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return a[:, 0] * b[:, 0] + a[:, 1] * b[:, 1] + a[:, 2] * b[:, 2]
+
+
+def total_energy_batch(P: np.ndarray, m: np.ndarray) -> np.ndarray:
+    return np.sqrt((m * C * C) ** 2 + _dot_rows(P, P) * C * C)
+
+
+def kinetic_energy_batch(P: np.ndarray, m: np.ndarray) -> np.ndarray:
+    pc2 = _dot_rows(P, P) * C * C
+    return pc2 / (np.sqrt((m * C * C) ** 2 + pc2) + m * C * C)
+
+
+def gamma_batch(P: np.ndarray, m: np.ndarray) -> np.ndarray:
+    return np.sqrt(1.0 + _dot_rows(P, P) / (m * C) ** 2)
+
+
+def velocity_batch(P: np.ndarray, m: np.ndarray) -> np.ndarray:
+    return P * (C * C / total_energy_batch(P, m))[:, None]
+
+
+def lorentz_acceleration_batch(P, E, B, q, m) -> np.ndarray:
+    v = velocity_batch(P, m)
+    F = q[:, None] * (E + np.cross(v, B))
+    return (F - _dot_rows(v, F)[:, None] * v / (C * C)) / (gamma_batch(P, m) * m)[:, None]
+
+
+def lienard_power_batch(P, A, q, m) -> np.ndarray:
+    v = velocity_batch(P, m)
+    g = gamma_batch(P, m)
+    va = np.cross(v, A)
+    bracket = _dot_rows(A, A) - _dot_rows(va, va) / (C * C)
+    return q * q * g ** 6 / (6.0 * math.pi * EPS0 * C ** 3) * np.maximum(bracket, 0.0)
+
+
+def boris_step_batch(X: np.ndarray, P: np.ndarray, t: float, dt: float, q: np.ndarray, m: np.ndarray,
+                     field_batch) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """boris_step aplicado a N partículas con el mismo reloj (t, dt). Cada fila es independiente."""
+    X_new, P_new, E, _ = boris_step_batch_force(X, P, t, dt, q, m, field_batch, None)
+    return X_new, P_new, E
+
+
+def boris_step_batch_force(X, P, t, dt, q, m, field_batch, force_fn):
+    """Como boris_step_batch, con una fuerza adicional F(X_mitad) (p. ej. Coulomb entre partículas)
+    evaluada en el mismo punto medio que los campos externos y aplicada en las dos medias patadas.
+    Devuelve (X_nuevo, P_nuevo, E_externo_en_el_punto_medio, F_adicional) (F = None si force_fn es None)."""
+    X_half = X + 0.5 * dt * velocity_batch(P, m)
+    E, B = field_batch(X_half, t + 0.5 * dt)
+    F = None
+    if force_fn is None:
+        kick = q[:, None] * E * (0.5 * dt)
+    else:
+        F = force_fn(X_half)
+        kick = (q[:, None] * E + F) * (0.5 * dt)
+    P_minus = P + kick
+    gm = np.sqrt(m * m + _dot_rows(P_minus, P_minus) / (C * C))
+    tv = q[:, None] * B * dt / (2.0 * gm)[:, None]
+    s = 2.0 * tv / (1.0 + _dot_rows(tv, tv))[:, None]
+    P_prime = P_minus + np.cross(P_minus, tv)
+    P_plus = P_minus + np.cross(P_prime, s)
+    P_new = P_plus + kick
+    X_new = X_half + 0.5 * dt * velocity_batch(P_new, m)
+    return X_new, P_new, E, F
+
+
+# ----------------------------------------------------------------------------
+# Interacción de Coulomb entre pares (cada par i<j se evalúa UNA sola vez)
+# ----------------------------------------------------------------------------
+_PAIRS: dict = {}
+
+
+def pair_indices(n: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Índices (i, j) con i < j: n(n-1)/2 pares, sin la autointeracción i = j."""
+    if n not in _PAIRS:
+        _PAIRS[n] = np.triu_indices(n, k=1)
+    return _PAIRS[n]
+
+
+def coulomb_pairs(X: np.ndarray, q: np.ndarray):
+    """Separaciones de todos los pares: (i, j, d = x_i - x_j, r = |d|)."""
+    i, j = pair_indices(len(X))
+    d = X[i] - X[j]
+    return i, j, d, np.sqrt(_dot_rows(d, d))
+
+
+def coulomb_forces_rmin(X: np.ndarray, q: np.ndarray) -> Tuple[np.ndarray, float]:
+    """Fuerza de Coulomb total sobre cada partícula [N] y distancia mínima entre pares [m].
+    La fuerza del par, F_ij = k q_i q_j d / r³, se calcula UNA vez y se suma a i y se resta a j
+    (tercera ley de Newton exacta en cada par). r = 0 daría una fuerza infinita: las configuraciones
+    con partículas coincidentes se rechazan antes y los encuentros cercanos se resuelven con subpasos."""
+    n = len(X)
+    i, j, d, r = coulomb_pairs(X, q)
+    Fp = d * (K_COULOMB * q[i] * q[j] / (r * r * r))[:, None]
+    F = np.empty((n, 3))
+    for c in range(3):
+        F[:, c] = np.bincount(i, Fp[:, c], n) - np.bincount(j, Fp[:, c], n)
+    return F, float(r.min())
+
+
+def coulomb_forces(X: np.ndarray, q: np.ndarray) -> np.ndarray:
+    return coulomb_forces_rmin(X, q)[0]
+
+
+def coulomb_energy(X: np.ndarray, q: np.ndarray) -> float:
+    """Energía potencial electrostática del sistema U = Σ_{i<j} k q_i q_j / r_ij [J]."""
+    if len(X) < 2:
+        return 0.0
+    i, j, _, r = coulomb_pairs(X, q)
+    return float(np.sum(K_COULOMB * q[i] * q[j] / r))
+
+
+# ----------------------------------------------------------------------------
 # Campos del sincrotrón
 # ----------------------------------------------------------------------------
 def transit_time_factor(u: float) -> float:
@@ -174,6 +304,28 @@ class SynchrotronFields:
 
     def inside(self, x: Vec) -> bool:
         return abs(math.hypot(x[0], x[1]) - self.R) <= self.a_r and abs(x[2]) <= self.a_z
+
+    def batch(self, X: np.ndarray, t: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Mismo campo que __call__ evaluado en N posiciones X (N, 3) al mismo instante t."""
+        r = np.hypot(X[:, 0], X[:, 1])
+        inside = (np.abs(r - self.R) <= self.a_r) & (np.abs(X[:, 2]) <= self.a_z)
+        B = np.zeros_like(X)
+        B[inside, 2] = self.bz
+        E = np.zeros_like(X)
+        if self.V != 0.0:
+            dth = (np.arctan2(X[:, 1], X[:, 0]) - self.theta_c + math.pi) % (2.0 * math.pi) - math.pi
+            s = r * dth
+            m = inside & (np.abs(s) < 0.5 * self.gap)
+            if m.any():
+                w = (1.0 + np.cos(2.0 * math.pi * s[m] / self.gap)) / self.gap
+                amp = math.copysign(1.0, self.q) * self.V * w * math.sin(self.omega * t + self.phi0)
+                rm = r[m]
+                E[m, 0] = amp * (-X[m, 1] / rm)
+                E[m, 1] = amp * (X[m, 0] / rm)
+        return E, B
+
+    def inside_batch(self, X: np.ndarray) -> np.ndarray:
+        return (np.abs(np.hypot(X[:, 0], X[:, 1]) - self.R) <= self.a_r) & (np.abs(X[:, 2]) <= self.a_z)
 
     def __call__(self, x: Vec, t: float) -> Tuple[Vec, Vec]:
         if not self.inside(x):
