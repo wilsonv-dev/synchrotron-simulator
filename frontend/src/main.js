@@ -1245,11 +1245,19 @@ function frame(now) {
 }
 
 (async function init() {
+  // Versión publicada: el motor Python se carga en el navegador; se muestra el progreso de la descarga
+  const inBrowser = api.ENGINE === 'pyodide';
+  if (inBrowser) {
+    $('#boot').hidden = false;
+    api.onEngineProgress((text) => { if (text) $('#bootText').textContent = text; });
+  }
   try {
     buildForm(await api.getDefaults());
     await newSession();
   } catch (e) {
-    showBanner(`No se pudo conectar con el backend (http://127.0.0.1:8000): ${e.message}`, true);
+    showBanner(inBrowser ? e.message : `No se pudo conectar con el backend (http://127.0.0.1:8000): ${e.message}`, true);
+  } finally {
+    $('#boot').hidden = true;
   }
   $('#speed').dispatchEvent(new Event('input'));
   if (store.get('sim.charts', '0') === '1') setChartsOpen(true);

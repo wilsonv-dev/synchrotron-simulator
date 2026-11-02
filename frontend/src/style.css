@@ -222,3 +222,13 @@ body.left-collapsed .side-left .side-head, body.right-collapsed .side-right .sid
   background: rgba(7, 11, 22, 0.98); }
 #pdfName { flex: 1; font-size: 12px; min-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #pdfFrame { flex: 1; width: 100%; border: 0; background: #525659; }
+
+/* --------------------------- carga del motor Python en el navegador (Pyodide) */
+.boot { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(5, 8, 16, 0.72); }
+.boot-card { width: min(440px, calc(100% - 32px)); padding: 22px 24px; text-align: center; }
+.boot-card b { display: block; font-size: 15px; margin: 10px 0 6px; }
+#bootText { margin: 0 0 8px; color: var(--teal); font-variant-numeric: tabular-nums; }
+.boot-spin { width: 34px; height: 34px; margin: 0 auto; border-radius: 50%; border: 3px solid var(--line);
+  border-top-color: var(--teal); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .boot-spin { animation-duration: 3s; } }

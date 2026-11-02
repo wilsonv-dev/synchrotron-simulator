@@ -1,10 +1,17 @@
 # Simulador 3D de sincrotrón — Fase 3 (interacciones entre partículas)
 
+**Versión en línea (gratis, sin instalar nada):** https://wilsonv-dev.github.io/synchrotron-simulator/
+
+La versión publicada no usa servidor: el mismo motor Python de `backend/app` se ejecuta en el navegador con
+[Pyodide](https://github.com/pyodide/pyodide) (Python + numpy en WebAssembly), dentro de un web worker. La primera
+visita descarga unos 15 MB (después quedan en caché). GitHub Actions (`.github/workflows/pages.yml`) ejecuta las
+pruebas y publica automáticamente en cada push a `main`.
+
 ## Backend (Python)
     cd backend
     python3 -m venv .venv && source .venv/bin/activate      # opcional
     pip install -r requirements.txt
-    pytest                                                  # 52 pruebas
+    pytest                                                  # 61 pruebas
     python bench_interactions.py                            # coste por paso con 10/50/100 partículas
     uvicorn app.main:app --reload --port 8000
 
@@ -60,3 +67,11 @@ Coulomb), con selector de partícula en los modos múltiple y bunch. Descargas:
   muestra en un visor dentro de la app. Desde el visor se puede descargar o abrir en otra pestaña; si no, no se guarda.
 - **Datos (CSV)**: una fila por paso con todas las magnitudes de la partícula analizada y, si aplica, los totales de
   radiación y la energía de Coulomb del sistema (separador coma, punto decimal).
+
+## Versión de GitHub Pages en local
+    cd frontend
+    VITE_ENGINE=pyodide BASE_PATH=/synchrotron-simulator/ npm run build
+    npm run preview -- --base /synchrotron-simulator/     # http://localhost:4173/synchrotron-simulator/
+En el servidor de desarrollo también se puede probar el motor en el navegador añadiendo `?engine=pyodide` a la URL.
+`backend/app/service.py` contiene la lógica de la API; `main.py` (FastAPI) y `browser.py` (Pyodide) sólo la exponen,
+y `tests/test_browser.py` comprueba que ambos responden exactamente igual.

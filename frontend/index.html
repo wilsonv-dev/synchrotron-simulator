@@ -192,6 +192,17 @@
     <iframe id="pdfFrame" title="Vista previa del informe en PDF"></iframe>
   </section>
 
+  <!-- ============================== Carga del motor Python en el navegador (versión publicada) -->
+  <div id="boot" class="boot" role="status" aria-live="polite" hidden>
+    <div class="boot-card glass">
+      <div class="boot-spin" aria-hidden="true"></div>
+      <b>Cargando el motor de simulación</b>
+      <p id="bootText">Iniciando…</p>
+      <p class="note">El motor físico (Python) se ejecuta en tu navegador. La primera vez se descargan unos 15 MB
+        (Python + numpy); después quedan en la caché y la carga es mucho más rápida.</p>
+    </div>
+  </div>
+
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
