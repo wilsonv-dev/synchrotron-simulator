@@ -1,4 +1,4 @@
-# Simulador 3D de sincrotrón — Fase 3 (interacciones entre partículas)
+# Simulador 3D de sincrotrón
 
 **Versión en línea (gratis, sin instalar nada):** https://wilsonv-dev.github.io/synchrotron-simulator/
 
