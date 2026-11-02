@@ -135,17 +135,20 @@
 
   <!-- ============================== Barra de reproducción -->
   <footer id="bar" class="glass">
-    <button id="play" class="primary" title="Espacio">Reproducir</button>
-    <button id="step" title="Flecha derecha">Paso +1</button>
-    <button id="reset" title="R">Reiniciar</button>
+    <!-- en el celular los paneles se abren desde aquí (en escritorio estos dos botones no se muestran) -->
+    <button id="mLeft" class="m-only" type="button" aria-label="Controles" aria-expanded="false" aria-controls="panel"><span class="ic">⚙</span><span class="lbl">Controles</span></button>
+    <button id="play" class="primary" title="Reproducir (Espacio)" aria-label="Reproducir"><span class="ic">▶</span><span class="lbl">Reproducir</span></button>
+    <button id="step" title="Un paso (flecha derecha)" aria-label="Paso +1"><span class="ic">⏭</span><span class="lbl">Paso +1</span></button>
+    <button id="reset" title="Reiniciar (R)" aria-label="Reiniciar"><span class="ic">↺</span><span class="lbl">Reiniciar</span></button>
     <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Punto de la simulación" />
     <span id="scrubLabel">punto 0</span>
-    <label class="speed">Animación
-      <input id="speed" type="range" min="0" max="100" value="55" />
+    <label class="speed"><span class="lbl">Animación</span>
+      <input id="speed" type="range" min="0" max="100" value="55" aria-label="Velocidad de la animación" />
     </label>
     <span id="speedLabel"></span>
-    <button id="chartsToggle" type="button" aria-expanded="false" aria-controls="charts">📈 Gráficas</button>
-    <button id="analysisOpen" type="button" title="Gráficas grandes, resumen e informe descargable">📄 Análisis e informe</button>
+    <button id="chartsToggle" type="button" aria-expanded="false" aria-controls="charts" aria-label="Gráficas"><span class="ic">📈</span><span class="lbl">Gráficas</span></button>
+    <button id="analysisOpen" type="button" title="Gráficas grandes, resumen e informe descargable" aria-label="Análisis e informe"><span class="ic">📄</span><span class="lbl">Análisis e informe</span></button>
+    <button id="mRight" class="m-only" type="button" aria-label="Datos" aria-expanded="false" aria-controls="right"><span class="ic">📊</span><span class="lbl">Datos</span></button>
   </footer>
 
   <!-- ============================== Vista de análisis (pantalla completa) + informe descargable -->
@@ -190,16 +193,20 @@
       <button id="pdfClose" class="icon-btn" type="button" title="Cerrar (Esc)">×</button>
     </header>
     <iframe id="pdfFrame" title="Vista previa del informe en PDF"></iframe>
+    <div id="pdfMobile" class="pdf-mobile">
+      <p>El informe está listo. En el celular se ve mejor abriéndolo con el visor de PDF del teléfono.</p>
+      <button id="pdfOpenTab2" class="primary" type="button">↗ Abrir PDF</button>
+      <button id="pdfDownload2" type="button">⬇ Descargar</button>
+    </div>
   </section>
 
   <!-- ============================== Carga del motor Python en el navegador (versión publicada) -->
   <div id="boot" class="boot" role="status" aria-live="polite" hidden>
     <div class="boot-card glass">
       <div class="boot-spin" aria-hidden="true"></div>
-      <b>Cargando el motor de simulación</b>
-      <p id="bootText">Iniciando…</p>
-      <p class="note">El motor físico (Python) se ejecuta en tu navegador. La primera vez se descargan unos 15 MB
-        (Python + numpy); después quedan en la caché y la carga es mucho más rápida.</p>
+      <b>Cargando el motor…</b>
+      <div class="boot-bar" aria-hidden="true"><span id="bootBar"></span></div>
+      <p class="note">La primera vez tarda unos segundos; después carga más rápido.</p>
     </div>
   </div>
 

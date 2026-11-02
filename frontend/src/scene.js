@@ -276,7 +276,9 @@ export class SynchrotronScene {
     this.setTrail(cfg.maxPoints);
     for (const key of ['chamber', 'ref', 'magnets', 'cavity', 'Bfield', 'axes', 'grid']) this._applyVis(key);
 
-    this.camera.position.set(rc * 1.15, rc * 0.95, rc * 1.5);
+    // en pantallas verticales (celular) la cámara se aleja para que el anillo completo quepa a lo ancho
+    const fit = Math.max(1, 1.6 / this.camera.aspect);
+    this.camera.position.set(rc * 1.15 * fit, rc * 0.95 * fit, rc * 1.5 * fit);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
     this.cfg = cfg;

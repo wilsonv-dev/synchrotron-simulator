@@ -66,8 +66,13 @@ const state = {
 };
 const scene = new SynchrotronScene($('#view'));
 let charts = null;                                    // ChartsPanel, se crea al abrir el panel por primera vez
-const ui = { chartsAt: 0, chartsCursor: -1, chartsDirty: true };
-if (import.meta.env.DEV) window.__sim = { state, scene };          // inspección desde la consola (sólo en desarrollo)
+const ui = { chartsAt: 0, chartsCursor: -1, chartsDirty: true,
+  hudAt: 0,              // último refresco de los textos del HUD (se limitan a ~10 por segundo al reproducir)
+  msPerStep: 0,          // coste medido de calcular un paso (incluye la transferencia de datos), media móvil
+  speedLabelAt: 0 };
+const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
+// inspección desde la consola (sólo en desarrollo); `ui` y `frame` permiten medir la fluidez del bucle
+if (import.meta.env.DEV) window.__sim = { state, scene, get ui() { return ui; }, frame: (t) => frame(t) };
 
 // ------------------------------------------------------------------ formato
 function fmt(v, d = 5) {
@@ -452,19 +457,37 @@ function selectParticle(k) {
   renderLegend();
 }
 
+// Tamaño del lote: ~0,4 s de cálculo según lo medido (pocos viajes al motor sin bloquearlo demasiado)
+function chunkSize() {
+  if (!ui.msPerStep) return CHUNK;
+  return Math.max(100, Math.min(5000, Math.round(400 / ui.msPerStep)));
+}
+// Pasos por segundo que el motor es capaz de producir (null si aún no se ha medido)
+const computeRate = () => (ui.msPerStep ? 1000 / ui.msPerStep : null);
+
 async function fetchMore(n) {
   if (state.fetching || state.lost || state.finished) return;
   state.fetching = true;
   const sid = state.id;
   try {
+    const t0 = performance.now();
     const r = await api.stepSim(sid, n, isMulti() ? state.detail.pid : null);
-    if (sid === state.id) (isMulti() ? ingestMulti(r) : ingest(r));
+    if (sid === state.id) {
+      (isMulti() ? ingestMulti(r) : ingest(r));
+      const got = isMulti() ? r.n_points - r.first_index : r.rows.length;
+      if (got > 0) {
+        const ms = (performance.now() - t0) / got;
+        ui.msPerStep = ui.msPerStep ? 0.6 * ui.msPerStep + 0.4 * ms : ms;
+      }
+    }
   } catch (e) { showBanner(`Error del backend: ${e.message}`, true); state.playing = false; syncPlay(); }
   finally { state.fetching = false; }
 }
 
 async function newSession() {
   state.playing = false; syncPlay();
+  ui.msPerStep = 0;                                   // otra configuración: otro coste por paso
+  if (isPhone()) setPhonePanel(null);                 // en el celular se cierra el panel para ver la escena
   const problem = validateConfig();
   if (problem) { showBanner(`Parámetros no válidos: ${problem}`, true); return; }
   let r;
@@ -626,12 +649,26 @@ $('#legendList').addEventListener('click', (e) => {
   if (r) selectParticle(Number(r.dataset.k));
 });
 
+// Mientras se reproduce, la escena 3D se actualiza en cada fotograma pero los textos del panel de datos sólo
+// ~10 veces por segundo (redibujar ~40 valores 60 veces por segundo resta fluidez y no se alcanza a leer)
+function hudDue() {
+  const now = performance.now();
+  if (state.playing && now - ui.hudAt < 100) return false;
+  ui.hudAt = now;
+  return true;
+}
+const pointTable = (d) => ($('#inspector').open
+  ? state.names.map((n) => `<tr><td>${n}</td><td>${fmt(d[n], 8)}</td></tr>`).join('') : '');
+$('#inspector').addEventListener('toggle', () => { state.shown = -1; });
+
 function updateView() {
   const i = state.cursor;
   state.shown = i;
   const d = row(i);
   scene.setParticle(d, state.info);
   scene.setTrailCount(i + 1);
+  $('#scrub').value = i;
+  if (!hudDue()) return;
 
   const status = $('#status');
   const atEnd = i === state.rows.length - 1;
@@ -647,8 +684,7 @@ function updateView() {
     ['Residuo ΔT − W', fmt(d.energy_residual, 3)],
     ...radiationPairs(d, state.info.rad_loss_per_turn_eV),
   ]);
-  $('#point').innerHTML = state.names.map((n) => `<tr><td>${n}</td><td>${fmt(d[n], 8)}</td></tr>`).join('');
-  $('#scrub').value = i;
+  $('#point').innerHTML = pointTable(d);
   $('#scrubLabel').textContent = `punto ${i} / ${state.rows.length - 1}`;
 }
 
@@ -656,7 +692,7 @@ function updateViewMulti() {
   const i = state.cursor;
   state.shown = i;
   scene.setMultiCursor(i);
-  renderLegend();
+  $('#scrub').value = i;
   const k = state.sel, m = state.meta[k];
   const ls = state.status[k]?.lost_step;
   const j = Math.min(i, lastValid(k));
@@ -664,6 +700,8 @@ function updateViewMulti() {
   if (!r) ensureDetail(j);
   const d = r ? Object.fromEntries(state.names.map((n, c) => [n, r[c]])) : null;
   if (d && !(ls != null && i > ls) && visualStyle(k).visible) scene.setParticle(d, state.info); else scene.hideVectors();
+  if (!hudDue()) return;
+  renderLegend();
 
   const alive = state.status.filter((s) => s.lost_step == null || i < s.lost_step).length;
   const status = $('#status');
@@ -707,8 +745,7 @@ function updateViewMulti() {
       ['Subpasos máx. por dt', `${it.max_substeps}${it.unresolved_steps ? ` · <b class="bad">${it.unresolved_steps} sin resolver</b>` : ''}`]);
   }
   setDl($('#telemetry'), pairs);
-  $('#point').innerHTML = d ? state.names.map((n) => `<tr><td>${n}</td><td>${fmt(d[n], 8)}</td></tr>`).join('') : '';
-  $('#scrub').value = i;
+  $('#point').innerHTML = d ? pointTable(d) : '';
   $('#scrubLabel').textContent = `punto ${i} / ${state.nPoints - 1}`;
 }
 
@@ -760,8 +797,20 @@ function setCollapsed(side, collapsed) {
   btn.title = collapsed ? 'Desplegar panel' : 'Plegar panel';
   store.set(`sim.${side}`, collapsed ? '1' : '0');
 }
+// En el celular cada panel se abre a casi toda la pantalla desde la barra; sólo uno a la vez
+function setPhonePanel(side) {
+  document.body.classList.toggle('m-left', side === 'left');
+  document.body.classList.toggle('m-right', side === 'right');
+  $('#mLeft').setAttribute('aria-expanded', String(side === 'left'));
+  $('#mRight').setAttribute('aria-expanded', String(side === 'right'));
+}
+$('#mLeft').addEventListener('click', () => setPhonePanel(document.body.classList.contains('m-left') ? null : 'left'));
+$('#mRight').addEventListener('click', () => setPhonePanel(document.body.classList.contains('m-right') ? null : 'right'));
 for (const side of ['left', 'right']) {
-  $(`#${side}Toggle`).addEventListener('click', () => setCollapsed(side, !document.body.classList.contains(`${side}-collapsed`)));
+  $(`#${side}Toggle`).addEventListener('click', () => {
+    if (isPhone()) { setPhonePanel(null); return; }     // en el celular el botón de la cabecera cierra el panel
+    setCollapsed(side, !document.body.classList.contains(`${side}-collapsed`));
+  });
   setCollapsed(side, store.get(`sim.${side}`, '0') === '1');
 }
 
@@ -1169,7 +1218,10 @@ function openPdfViewer(blob, name) {
   if (pdf.url) URL.revokeObjectURL(pdf.url);
   pdf.blob = blob; pdf.name = name; pdf.url = URL.createObjectURL(blob);
   $('#pdfName').textContent = `${name} · ${Math.max(1, Math.round(blob.size / 1024))} KB`;
-  $('#pdfFrame').src = pdf.url;
+  // los navegadores móviles no muestran PDFs incrustados: allí se ofrece abrir o descargar
+  const noEmbed = isPhone() || window.matchMedia('(pointer: coarse)').matches;
+  $('#pdfViewer').classList.toggle('no-embed', noEmbed);
+  $('#pdfFrame').src = noEmbed ? 'about:blank' : pdf.url;
   $('#pdfViewer').hidden = false;
   $('#pdfClose').focus();
 }
@@ -1181,14 +1233,24 @@ function closePdfViewer() {
 }
 $('#pdfDownload').addEventListener('click', () => { if (pdf.blob) downloadBlob(pdf.name, pdf.blob); });
 $('#pdfOpenTab').addEventListener('click', () => { if (pdf.url) window.open(pdf.url, '_blank', 'noopener'); });
+$('#pdfOpenTab2').addEventListener('click', () => $('#pdfOpenTab').click());
+$('#pdfDownload2').addEventListener('click', () => $('#pdfDownload').click());
 $('#pdfClose').addEventListener('click', closePdfViewer);
 $('#anCsv').addEventListener('click', () => downloadCSV().catch((e) => { $('#anInfo').textContent = `Error: ${e.message}`; }));
 
-function syncPlay() { $('#play').textContent = state.playing ? 'Pausa' : 'Reproducir'; }
+function syncPlay() {
+  const label = state.playing ? 'Pausa' : 'Reproducir';
+  $('#play .ic').textContent = state.playing ? '❚❚' : '▶';
+  $('#play .lbl').textContent = label;
+  $('#play').setAttribute('aria-label', label);
+  state.shown = -1;                                   // al pausar se refresca todo el panel de datos
+}
 function updateSpeedLabel() {
   // La velocidad de animación (pasos/s de pantalla) es independiente del tiempo físico: 1 s de pantalla = speed·dt s físicos
   const dt = state.info ? state.info.dt_s : 0;
-  $('#speedLabel').textContent = `${Math.round(state.speed)} pasos/s · 1 s de pantalla = ${fmt(state.speed * dt * 1e9, 3)} ns físicos`;
+  const eff = effectiveSpeed();
+  const limit = eff < state.speed * 0.98 ? ` · el cálculo da ~${Math.round(eff)} pasos/s` : '';
+  $('#speedLabel').textContent = `${Math.round(state.speed)} pasos/s${limit} · 1 s de pantalla = ${fmt(eff * dt * 1e9, 3)} ns físicos`;
 }
 
 // ----------------------------------------------------------------- controles
@@ -1222,6 +1284,14 @@ window.addEventListener('keydown', (e) => {
   else if (e.code === 'KeyR') resetSession();
 });
 
+// Velocidad real de la animación: la pedida, salvo que el motor no pueda calcular tan deprisa; entonces se
+// avanza al ritmo del cálculo (movimiento continuo) en lugar de adelantarse y quedarse esperando (tirones)
+function effectiveSpeed() {
+  const rate = computeRate();
+  if (state.finished || state.lost || !rate) return state.speed;
+  return Math.min(state.speed, 0.9 * rate);
+}
+
 // -------------------------------------------------------------------- bucle
 let last = performance.now();
 function frame(now) {
@@ -1229,13 +1299,14 @@ function frame(now) {
   last = now;
   if (state.id && nRows()) {
     if (state.playing) {
-      state.acc += state.speed * dt;
+      state.acc += effectiveSpeed() * dt;
       const adv = Math.floor(state.acc);
       state.acc -= adv;
       const lastIdx = nRows() - 1;
       state.cursor = Math.min(state.cursor + adv, lastIdx);
       if (state.cursor >= lastIdx && (state.lost || state.finished)) { state.playing = false; syncPlay(); }
-      if (lastIdx - state.cursor < Math.max(2 * CHUNK, state.speed / 2)) fetchMore(CHUNK);
+      if (lastIdx - state.cursor < Math.max(2 * chunkSize(), state.speed)) fetchMore(chunkSize());
+      if (now - ui.speedLabelAt > 500) { ui.speedLabelAt = now; updateSpeedLabel(); }
     }
     if (state.cursor !== state.shown) (isMulti() ? updateViewMulti() : updateView());
     maybeUpdateCharts(now);
@@ -1249,7 +1320,9 @@ function frame(now) {
   const inBrowser = api.ENGINE === 'pyodide';
   if (inBrowser) {
     $('#boot').hidden = false;
-    api.onEngineProgress((text) => { if (text) $('#bootText').textContent = text; });
+    const steps = [30, 65, 90];                         // descarga de Python, paquetes, preparación
+    let stage = 0;
+    api.onEngineProgress((text) => { $('#bootBar').style.width = `${text ? steps[Math.min(stage++, 2)] : 100}%`; });
   }
   try {
     buildForm(await api.getDefaults());

@@ -171,6 +171,9 @@ body.left-collapsed .side-left .side-head, body.right-collapsed .side-right .sid
 #scrubLabel { min-width: 104px; }
 #chartsToggle { white-space: nowrap; }
 #chartsToggle[aria-expanded=true] { background: rgba(182,120,255,.2); border-color: rgba(182,120,255,.6); }
+#bar button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+#bar .ic { font-size: 13px; line-height: 1; }
+.m-only { display: none !important; }
 
 /* ------------------------------------------------------- responsivo */
 @media (max-width: 1100px) {
@@ -179,12 +182,39 @@ body.left-collapsed .side-left .side-head, body.right-collapsed .side-right .sid
   .charts-grid { grid-template-columns: 1fr 1fr auto 1fr; }
   .charts-grid .chart-card:last-child { display: none; }
 }
+
+/* Celular: la escena 3D ocupa la pantalla; los paneles se abren a pantalla casi completa desde la barra
+   (⚙ Controles, 📊 Datos) y la barra pasa a dos filas: botones con icono arriba, línea de tiempo abajo. */
 @media (max-width: 760px) {
-  :root { --left-w: 240px; --right-w: 220px; }
-  .toast { width: calc(100% - 2 * var(--gap)); top: auto; bottom: calc(var(--bottom) + 4px); }
-  .charts-grid { grid-template-columns: 1fr 1fr; }
-  .charts-grid .chart-card.square, .charts-grid .chart-card:nth-child(4) { display: none; }
-  .speed { display: none; }
+  :root { --gap: 8px; --bar-h: 100px; --charts-h: 44vh; }
+  .m-only { display: inline-flex !important; }
+  .side { display: none; left: var(--gap); right: var(--gap); width: auto; z-index: 15; }
+  body.m-left .side-left, body.m-right .side-right { display: flex; }
+  body.left-collapsed .side-left, body.right-collapsed .side-right { width: auto; bottom: var(--bottom); }
+  body.left-collapsed .side-left .side-body, body.right-collapsed .side-right .side-body { display: flex; }
+  body.left-collapsed .side-left h1, body.right-collapsed .side-right .status { display: block; }
+  .side-head { padding: 8px 10px; }
+  .fgrid label, .pgrid label { grid-template-columns: 1fr 120px; }
+  .tab { font-size: 13px; padding: 9px 4px; }
+
+  #bar { flex-wrap: wrap; align-content: center; height: var(--bar-h); padding: 6px 8px; gap: 6px; row-gap: 8px; }
+  /* 7 botones por fila (base 11 %) y la línea de tiempo con base 55 %: no caben juntos, así que la línea de
+     tiempo, su etiqueta y la velocidad pasan a la segunda fila */
+  #bar button { flex: 1 1 11%; justify-content: center; min-width: 0; height: 40px; padding: 0 4px; }
+  #bar .lbl { display: none; }
+  #bar .ic { font-size: 18px; }
+  #scrub { order: 20; flex: 1 1 30%; min-width: 0; }
+  #scrubLabel { order: 21; flex: none; min-width: 0; font-size: 11px; }
+  .speed { order: 22; flex: none; } #speed { width: 56px; }
+  #speedLabel { display: none; }
+  #mLeft[aria-expanded=true], #mRight[aria-expanded=true] { background: rgba(34,211,166,.2); border-color: var(--teal); }
+
+  .toast { width: calc(100% - 2 * var(--gap)); top: var(--gap); }
+  #charts { padding: 6px 8px; }
+  .charts-grid { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 8px; }
+  .charts-grid .chart-card { flex: 0 0 88%; scroll-snap-align: start; display: flex !important; }
+  .charts-grid .chart-card.square { flex-basis: 70%; aspect-ratio: auto; }
+  .an-head { gap: 6px; } .an-head h2 { width: 100%; } #anInfo { order: 9; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
@@ -227,8 +257,16 @@ body.left-collapsed .side-left .side-head, body.right-collapsed .side-right .sid
 .boot { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(5, 8, 16, 0.72); }
 .boot-card { width: min(440px, calc(100% - 32px)); padding: 22px 24px; text-align: center; }
 .boot-card b { display: block; font-size: 15px; margin: 10px 0 6px; }
-#bootText { margin: 0 0 8px; color: var(--teal); font-variant-numeric: tabular-nums; }
+.boot-bar { height: 6px; margin: 4px 0 10px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.boot-bar span { display: block; height: 100%; width: 8%; background: var(--teal); border-radius: 3px; transition: width .5s ease; }
 .boot-spin { width: 34px; height: 34px; margin: 0 auto; border-radius: 50%; border: 3px solid var(--line);
   border-top-color: var(--teal); animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .boot-spin { animation-duration: 3s; } }
+
+/* visor PDF: los navegadores móviles no muestran PDFs incrustados; se ofrece abrir o descargar */
+.pdf-mobile { display: none; padding: 24px; text-align: center; }
+.pdf-mobile p { color: var(--txt); margin: 0 0 16px; }
+.pdf-mobile button { margin: 4px; min-width: 140px; height: 42px; }
+#pdfViewer.no-embed #pdfFrame { display: none; }
+#pdfViewer.no-embed .pdf-mobile { display: block; }
