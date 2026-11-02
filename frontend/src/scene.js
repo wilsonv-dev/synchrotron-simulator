@@ -3,6 +3,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const V = (x, y, z, k = 1) => new THREE.Vector3(x * k, z * k, -y * k);
 const UP = new THREE.Vector3(0, 1, 0);
+const DOWN = new THREE.Vector3(0, -1, 0);
+// Cono de radiación: rango de potencias representado (W) y largos correspondientes (unidades de escena;
+// el brillo de la partícula mide ~0,75, así que el mínimo siempre sobresale)
+const P_VIS_MIN = 1e-24, P_VIS_MAX = 1e-8;
+const CONE_L_MIN = 0.9, CONE_L_MAX = 4.0;
+// Posición de P en la escala logarítmica fija, de 0 (P_VIS_MIN o menos) a 1 (P_VIS_MAX o más)
+export function coneLevel(P) {
+  const f = Math.log10(P / P_VIS_MIN) / Math.log10(P_VIS_MAX / P_VIS_MIN);
+  return Math.min(1, Math.max(0, f));
+}
 
 const COLORS = {
   v: 0x8fe66f, p: 0xffb84d, B: 0xb678ff, E: 0x39e6d0, rad: 0xff4fd8, trail: 0x7cf5ff,
@@ -116,7 +126,12 @@ export class SynchrotronScene {
     this.beamlinesGroup = new THREE.Group();
     this.scene.add(this.beamlinesGroup);
 
-    this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.8, 1.8, 16, 1, true),
+    // Cono de radiación: geometría unitaria con el VÉRTICE en el origen y la base en y = −1; se orienta a lo
+    // largo de v y se escala con el semiángulo 1/γ (× coneX, sólo visual) y un largo ∝ log(P / P_ref).
+    const coneGeo = new THREE.ConeGeometry(1, 1, 32, 1, true);
+    coneGeo.translate(0, -0.5, 0);
+    this.coneX = 3;
+    this.cone = new THREE.Mesh(coneGeo,
       new THREE.MeshBasicMaterial({ color: COLORS.rad, transparent: true, opacity: 0.35, side: THREE.DoubleSide,
         depthWrite: false, blending: THREE.AdditiveBlending }));
     this.cone.renderOrder = 17;
@@ -554,20 +569,27 @@ export class SynchrotronScene {
 
     const showRad = this.vis.rad && d.power_W > 0;
     this.cone.visible = showRad;
+    // Escala ABSOLUTA y logarítmica, igual en todas las simulaciones: de P_VIS_MIN a P_VIS_MAX el largo va de
+    // CONE_L_MIN a CONE_L_MAX (≈0,2 unidades por década). Abarca 16 décadas porque P cambia muchísimo
+    // (∝ γ⁴/ρ² y ∝ 1/m⁴): así un protón o un electrón lento siguen mostrando un cono, más corto y tenue,
+    // que nunca queda escondido dentro del brillo de la partícula.
+    const level = showRad ? coneLevel(d.power_W) : 0;
 
     if (showRad) {
-      const Lc = 2.5;
-      const ang = Math.max(1 / d.gamma, 0.07);
-      this.cone.scale.set(Lc * Math.tan(ang), Lc, Lc * Math.tan(ang));
-      this.cone.quaternion.setFromUnitVectors(UP, vhat.clone().negate());
-      this.cone.position.copy(pos).add(vhat.clone().multiplyScalar(Lc / 2));
+      const L = CONE_L_MIN + (CONE_L_MAX - CONE_L_MIN) * level;
+      const ang = Math.min(this.coneX / d.gamma, 1.2);     // 1/γ físico × factor visual; tope para v ≪ c
+      const w = L * Math.tan(ang);
+      this.cone.scale.set(w, L, w);
+      this.cone.quaternion.setFromUnitVectors(DOWN, vhat);
+      this.cone.position.copy(pos);                       // el vértice está en la partícula
+      this.cone.material.opacity = 0.14 + 0.26 * level;
     }
 
     if (this.beamlineMeshes) {
       for (const bm of this.beamlineMeshes) {
         const dist = pos.distanceTo(bm.origin);
         if (showRad && dist < 1.5) {
-          const intensity = 1.0 - (dist / 1.5);
+          const intensity = (1.0 - (dist / 1.5)) * level;
           bm.mesh.material.opacity = 0.15 + 0.85 * intensity;
         } else {
           bm.mesh.material.opacity = 0.15;

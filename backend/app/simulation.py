@@ -566,6 +566,8 @@ class MultiSimulation:
         self.alive = inside.copy()
         self.lost_step = np.where(inside, -1, 0)
         self._power_prev = self._power(self.X, self.P, 0.0, np.arange(self.n))
+        # potencia radiada TOTAL (suma de las partículas confinadas) en cada índice del reloj común
+        self._hPtot = [float(np.sum(self._power_prev[self.alive]))]
         self._hx = [self.X.copy()]
         self._hp = [self.P.copy()]
         self._hacc = [self._acc()]
@@ -676,6 +678,7 @@ class MultiSimulation:
         power = self._power(X_new, P_new, self.t, idx)
         self.radiated[idx] += 0.5 * (self._power_prev[idx] + power) * dt   # calculada, NO se resta
         self._power_prev[idx] = power
+        self._hPtot.append(float(np.sum(power)))
         self.X[idx], self.P[idx] = X_new, P_new
         out = ~self.fields.inside_batch(X_new)
         if out.any():
@@ -715,6 +718,15 @@ class MultiSimulation:
     def _active(self, i: int) -> np.ndarray:
         """Partículas que siguen en la cámara (e interactúan) en el índice i."""
         return (self.lost_step < 0) | (self.lost_step > i)
+
+    def radiation_series(self, start: int = 0, stop: Optional[int] = None) -> dict:
+        """Radiación sincrotrón de TODAS las partículas en cada índice: potencia total instantánea (suma de
+        Liénard de cada partícula) y energía total radiada acumulada (suma de ∫P dt de cada una, incluidas
+        las ya perdidas, cuya emisión hasta salir de la cámara cuenta). Es la suma incoherente: no incluye
+        radiación coherente del bunch. La energía radiada se calcula pero NO se resta a las partículas."""
+        idxs = range(self.n_points)[start:stop]
+        return dict(first_index=start, power_W=[self._hPtot[i] for i in idxs],
+                    radiated_J=[float(np.sum(self._hacc[i][:, 1])) for i in idxs])
 
     def system_series(self, start: int = 0, stop: Optional[int] = None) -> Optional[dict]:
         """Energía cinética total, energía de Coulomb y momento total de las partículas confinadas en cada
@@ -794,11 +806,15 @@ class MultiSimulation:
         confined = (r_max <= self.R + self.a_r and r_min >= self.R - self.a_r and vertical_ok
                     and abs(x0[2]) <= self.a_z)
         g = gamma_of(p0, m)
+        # radiación prevista en su propia órbita circular de radio ρ (fórmulas de la órbita circular)
         return dict(p_MeV_c=p_abs * C / MEV, ekin_MeV=float(self.T0[k]) / MEV, gamma=g,
                     beta=math.sqrt(1.0 - 1.0 / g ** 2), rigidity_Tm=p_abs / abs(q), rho_m=rho,
                     r_min_pred_m=r_min, r_max_pred_m=r_max,
                     rotation="antihorario" if omega_z > 0 else "horario",
-                    confined_predicted=bool(confined))
+                    confined_predicted=bool(confined),
+                    rad_power_W=circular_power(q, m, p_abs, rho),
+                    rad_loss_per_turn_eV=energy_loss_per_turn(q, m, p_abs, rho) / E_CHARGE,
+                    ecrit_eV=1.5 * HBAR * C * g ** 3 / rho / E_CHARGE, cone_half_angle_rad=1.0 / g)
 
     def derived(self) -> dict:
         prm = self.params
@@ -821,6 +837,8 @@ class MultiSimulation:
                             f"{prm.kinetic_energy_MeV:g} MeV): ganancia {info['rf_gain_per_turn_eV']:+.4g} eV/vuelta "
                             "con B constante; las demás partículas cruzan la cavidad con otra fase.")
         out = dict(**info, mode=self.mode, n_particles=self.n, n_confined_predicted=n_conf,
+                   rad_power_total_pred_W=sum(p["rad_power_W"] for p in per),
+                   rad_loss_per_turn_total_pred_eV=sum(p["rad_loss_per_turn_eV"] for p in per),
                    rho_m=self.p_ref / (abs(self.sp.charge) * self.b_used),
                    particles=per, warnings=warnings, interactions=self.interactions,
                    notes=([*INTERACTION_LIMITS] if self.interactions else [INTERACTION_NOTE]) + [
@@ -857,7 +875,8 @@ class MultiSimulation:
         return dict(id=self.id, mode=self.mode, params=self.params.model_dump(), derived=self.derived(),
                     fields=self.field_names, n_points=self.n_points, lost=self.lost, lost_reason=self.lost_reason,
                     finished=self.finished, particles=self.meta, status=self.status(),
-                    first_index=0, positions=self.positions(0), system=self.system_series(0))
+                    first_index=0, positions=self.positions(0), system=self.system_series(0),
+                    radiation=self.radiation_series(0))
 
 
 def create_simulation(params: SimParams, sim_id: str = ""):

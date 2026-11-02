@@ -90,6 +90,7 @@ def step(sim_id: str, n: int = Query(200, ge=1, le=5000), detail: Optional[str] 
     return dict(id=sim.id, mode=sim.mode, first_index=first, n_points=sim.n_points,
                 positions=sim.positions(first), status=sim.status(), detail=_detail(sim, pid, first),
                 system=sim.system_series(first), interaction=sim.interaction_info(),
+                radiation=sim.radiation_series(first),
                 lost=sim.lost, lost_reason=sim.lost_reason, finished=sim.finished)
 
 

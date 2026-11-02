@@ -1,11 +1,15 @@
 import './style.css';
 import { SynchrotronScene } from './scene.js';
+import { ChartsPanel } from './charts.js';
+import { buildCSV, downloadBlob, downloadText } from './report.js';
 import * as api from './api.js';
 
 const $ = (s) => document.querySelector(s);
 const CHUNK = 250;                                   // pasos que se piden al motor de Python por lote
 const E_CHARGE = 1.602176634e-19;
 
+// Cada parámetro va a la pestaña «Acelerador» (#form) o «Partículas» (#formPart)
+const PART_KEYS = new Set(['species', 'kinetic_energy_MeV', 'dp_rel', 'dr_m', 'start_angle_deg']);
 const PARAMS_UI = [
   ['species', 'Partícula', ['electron', 'positron', 'proton']],
   ['kinetic_energy_MeV', 'Energía cinética (MeV)'],
@@ -57,10 +61,12 @@ const state = {
   // --- varias partículas
   uiMode: 'single', mode: 'single', defaults: null,
   cfg: { particles: [], bunch: {}, interactions: false },
-  system: null, interaction: null,
+  system: null, interaction: null, radiation: null,
   meta: [], status: [], nPoints: 0, sel: 0, detail: { pid: null, rows: [] }, detailLoading: false, legendSig: '',
 };
 const scene = new SynchrotronScene($('#view'));
+let charts = null;                                    // ChartsPanel, se crea al abrir el panel por primera vez
+const ui = { chartsAt: 0, chartsCursor: -1, chartsDirty: true };
 if (import.meta.env.DEV) window.__sim = { state, scene };          // inspección desde la consola (sólo en desarrollo)
 
 // ------------------------------------------------------------------ formato
@@ -71,7 +77,33 @@ function fmt(v, d = 5) {
   return a >= 1e4 || a < 1e-3 ? v.toExponential(d - 2) : Number(v.toPrecision(d)).toString();
 }
 const row = (i) => Object.fromEntries(state.names.map((n, j) => [n, state.rows[i][j]]));
-const setDl = (el, pairs) => { el.innerHTML = pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join(''); };
+
+// Radiación sincrotrón: tipo de luz según la longitud de onda crítica λc = h c / εc
+const HC_EV_NM = 1239.84198;
+function lightBand(ecrit_eV) {
+  if (!(ecrit_eV > 0)) return { lambda: null, band: '—' };
+  const nm = HC_EV_NM / ecrit_eV;
+  const band = nm > 1e6 ? 'microondas' : nm > 700 ? 'infrarrojo' : nm >= 400 ? 'visible'
+    : nm >= 10 ? 'ultravioleta' : nm >= 0.01 ? 'rayos X' : 'rayos gamma';
+  return { lambda: nm, band };
+}
+const lambdaText = (nm) => (nm >= 1e6 ? `${fmt(nm / 1e6)} mm` : nm >= 1e3 ? `${fmt(nm / 1e3)} µm` : `${fmt(nm)} nm`);
+// Bloque del HUD con la radiación de UNA partícula (fila del motor d) y su pérdida prevista por vuelta
+function radiationPairs(d, lossPerTurn_eV) {
+  const rad_eV = d.radiated_J / E_CHARGE;
+  const { lambda, band } = lightBand(d.ecrit_eV);
+  return [
+    ['— Radiación sincrotrón —', ''],
+    ['Potencia emitida (Liénard)', `${fmt(d.power_W)} W`],
+    ['Energía radiada acumulada', `${fmt(rad_eV)} eV`],
+    ['Fracción de T radiada (no se resta)', `${fmt((rad_eV / (d.ekin_MeV * 1e6)) * 100)} %`],
+    ['Pérdida prevista por vuelta', `${fmt(lossPerTurn_eV)} eV`],
+    ['Energía crítica de los fotones', `${fmt(d.ecrit_eV)} eV`],
+    ['λ crítica', lambda ? `${lambdaText(lambda)} · ${band}` : '— (sin curvatura)'],
+    ['Semiángulo del cono 1/γ', `${fmt(1000 / d.gamma)} mrad (dibujo ×${scene.coneX})`],
+  ];
+}
+const setDl = (el, pairs) => { el.innerHTML = pairs.map(([k, v]) => `<dt title="${String(k).replace(/"/g, '&quot;')}">${k}</dt><dd>${v}</dd>`).join(''); };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
@@ -86,13 +118,15 @@ function speciesZM(p) {
 // ---------------------------------------------------------------- formulario
 function buildForm(defaults) {
   state.defaults = defaults;
-  $('#form').innerHTML = PARAMS_UI.map(([key, text, extra]) => {
+  const field = ([key, text, extra]) => {
     if (Array.isArray(extra)) {
       return `<label data-key="${key}"><span>${text}</span><select name="${key}">${extra.map((o) => `<option ${o === defaults[key] ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`;
     }
     const val = defaults[key] ?? '';
     return `<label data-key="${key}"><span>${text}</span><input type="number" step="any" name="${key}" value="${val}" ${extra === 'opt' ? 'placeholder="auto"' : ''}></label>`;
-  }).join('');
+  };
+  $('#form').innerHTML = PARAMS_UI.filter(([k]) => !PART_KEYS.has(k)).map(field).join('');
+  $('#formPart').innerHTML = PARAMS_UI.filter(([k]) => PART_KEYS.has(k)).map(field).join('');
   $('#toggles').innerHTML = TOGGLES.map(([k, t, c]) =>
     `<label><input type="checkbox" data-k="${k}" checked><span class="sw" style="background:${c}"></span>${t}</label>`).join('');
   $('#toggles').addEventListener('change', (e) => { scene.setVisible(e.target.dataset.k, e.target.checked); state.shown = -1; });
@@ -104,7 +138,7 @@ function buildForm(defaults) {
 }
 function readForm() {
   const p = {};
-  for (const el of $('#form').elements) {
+  for (const el of [...$('#form').elements, ...$('#formPart').elements]) {
     if (!el.name) continue;
     if (el.tagName === 'SELECT') { p[el.name] = el.value; continue; }
     if (el.value === '') { p[el.name] = null; continue; }
@@ -122,7 +156,8 @@ function updateModeUI() {
   const m = state.uiMode;
   $('#mode').value = m;
   $('#title').textContent = TITLES[m];
-  $('#formTitle').textContent = m === 'single' ? 'Parámetros' : 'Anillo y partícula de referencia';
+  $('#partTitle').textContent = m === 'single' ? 'Partícula' : 'Partícula de referencia (sintoniza B y RF)';
+  $('#interSingle').hidden = m !== 'single';
   $('#multiPanel').hidden = m !== 'multi';
   $('#bunchPanel').hidden = m !== 'bunch';
   $('#interactionNote').hidden = m === 'single';
@@ -130,7 +165,7 @@ function updateModeUI() {
   $('#interactions').checked = state.cfg.interactions;
   $('#interactionNote').textContent = state.cfg.interactions ? NOTE_ON : NOTE_OFF;
   for (const [key, text] of PARAMS_UI) {
-    const lab = $(`#form label[data-key="${key}"]`);
+    const lab = $(`#panel label[data-key="${key}"]`);
     if (!lab) continue;
     lab.hidden = m !== 'single' && SINGLE_ONLY.has(key);
     lab.querySelector('span').textContent = m !== 'single' && MULTI_LABELS[key] ? MULTI_LABELS[key] : text;
@@ -362,6 +397,8 @@ function ingest(resp) {
   scene.commitTrail();
   state.lost = resp.lost; state.lostReason = resp.lost_reason; state.finished = resp.finished;
   $('#scrub').max = state.rows.length - 1;
+  ui.chartsDirty = true;
+  updateReportHint();
 }
 
 // --------------------------------------------------- datos desde Python (multi/bunch)
@@ -379,8 +416,14 @@ function ingestMulti(resp) {
     }
   }
   if (resp.interaction) state.interaction = resp.interaction;
+  if (resp.radiation && state.radiation) {      // radiación total de todas las partículas por paso
+    const rr = resp.radiation;
+    for (const key of ['power_W', 'radiated_J']) rr[key].forEach((v, j) => { state.radiation[key][rr.first_index + j] = v; });
+  }
+  ui.chartsDirty = true;
   state.lost = resp.lost; state.lostReason = resp.lost_reason; state.finished = resp.finished;
   $('#scrub').max = state.nPoints - 1;
+  updateReportHint();
 }
 const lastValid = (k) => state.status[k]?.lost_step ?? state.nPoints - 1;
 
@@ -395,6 +438,7 @@ async function ensureDetail(j) {
   try {
     const h = await api.getParticleHistory(sid, pid, start);
     if (sid === state.id && state.detail.pid === pid) h.rows.forEach((r, i) => { det.rows[h.first_index + i] = r; });
+    ui.chartsDirty = true;
   } catch (e) { showBanner(`Error del backend: ${e.message}`, true); }
   finally { state.detailLoading = false; state.shown = -1; }
 }
@@ -404,6 +448,7 @@ function selectParticle(k) {
   state.detail = { pid: state.meta[k].pid, rows: [] };
   scene.setSelected(k);
   state.legendSig = ''; state.shown = -1;
+  ui.chartsDirty = true;
   renderLegend();
 }
 
@@ -437,6 +482,9 @@ async function resetSession() {
 
 function buildRingFor(r) {
   const d = r.derived, p = r.params;
+  ringInfo = { R: p.ring_radius_m, aR: d.aperture_r_m };
+  if (charts) charts.setRing(ringInfo.R, ringInfo.aR);
+  ui.chartsDirty = true;
   scene.buildRing({ R: p.ring_radius_m, aR: d.aperture_r_m, aZ: d.aperture_z_m, nMag: p.n_magnets, gap: d.rf_gap_m,
     thetaC: d.cavity_angle_rad, bSign: Math.sign(d.bz_T) || 1, maxPoints: p.n_steps + 1 });
   for (const el of $('#toggles').querySelectorAll('input')) scene.setVisible(el.dataset.k, el.checked);
@@ -444,6 +492,7 @@ function buildRingFor(r) {
 
 function loadSession(r) {
   state.mode = 'single';
+  state.radiation = null;
   document.body.classList.remove('multi-mode');
   $('#legend').hidden = true;
   $('#derivedExtra').innerHTML = '';
@@ -478,6 +527,7 @@ function loadMulti(r) {
   state.sel = k;
   state.detail = { pid: r.detail.pid, rows: [] };
   state.system = r.system ? { kinetic_J: [], potential_J: [], total_J: [], momentum: [] } : null;
+  state.radiation = r.radiation ? { power_W: [], radiated_J: [] } : null;
   state.interaction = r.derived.interaction || null;
   ingestMulti(r);
   scene.setSelected(k);
@@ -593,9 +643,9 @@ function updateView() {
     ['Paso', `${d.i} / ${state.params.n_steps}`], ['Tiempo físico', `${fmt(d.t * 1e9)} ns`], ['Vueltas', fmt(d.turns, 5)],
     ['γ', fmt(d.gamma, 6)], ['Energía cinética', `${fmt(d.ekin_MeV, 8)} MeV`],
     ['r', `${fmt(d.r, 7)} m`], ['r − R', `${fmt(d.dr * 1e3)} mm`], ['|B| en la partícula', `${fmt(Math.hypot(d.Bx, d.By, d.Bz))} T`],
-    ['Potencia radiada (Liénard)', `${fmt(d.power_W)} W`], ['Energía crítica', `${fmt(d.ecrit_eV)} eV`],
-    ['Energía radiada acumulada', `${fmt(d.radiated_J / 1.602176634e-19)} eV`], ['Trabajo de E acumulado', `${fmt(d.work_E_J / 1.602176634e-19)} eV`],
+    ['Trabajo de E acumulado', `${fmt(d.work_E_J / 1.602176634e-19)} eV`],
     ['Residuo ΔT − W', fmt(d.energy_residual, 3)],
+    ...radiationPairs(d, state.info.rad_loss_per_turn_eV),
   ]);
   $('#point').innerHTML = state.names.map((n) => `<tr><td>${n}</td><td>${fmt(d[n], 8)}</td></tr>`).join('');
   $('#scrub').value = i;
@@ -632,9 +682,17 @@ function updateViewMulti() {
       ['|p|', `${fmt(Math.hypot(d.px, d.py, d.pz) * 299792458 / E_CHARGE / 1e6, 8)} MeV/c`],
       ['r', `${fmt(d.r, 7)} m`], ['r − R', `${fmt(d.dr * 1e3)} mm`], ['z', `${fmt(d.z * 1e3)} mm`],
       ['|B| en la partícula', `${fmt(Math.hypot(d.Bx, d.By, d.Bz))} T`],
-      ['Potencia radiada (Liénard)', `${fmt(d.power_W)} W`], ['Trabajo de E acumulado', `${fmt(d.work_E_J / E_CHARGE)} eV`],
-      ['Residuo ΔT − W', fmt(d.energy_residual, 3)]);
+      ['Trabajo de E acumulado', `${fmt(d.work_E_J / E_CHARGE)} eV`],
+      ['Residuo ΔT − W', fmt(d.energy_residual, 3)],
+      ...radiationPairs(d, state.info.particles?.[k]?.rad_loss_per_turn_eV));
   } else pairs.push(['Diagnóstico', 'cargando…']);
+  const rad = state.radiation;
+  if (rad && rad.power_W[i] !== undefined) {
+    pairs.push(['— Radiación total (todas) —', ''],
+      ['Potencia total emitida', `${fmt(rad.power_W[i])} W`],
+      ['Energía total radiada', `${fmt(rad.radiated_J[i] / E_CHARGE)} eV`],
+      ['Pérdida total prevista / vuelta', `${fmt(state.info.rad_loss_per_turn_total_pred_eV)} eV`]);
+  }
   const sys = state.system;
   if (sys && sys.total_J[i] !== undefined) {
     const E0 = sys.total_J[0], U = sys.potential_J[i], Pt = sys.momentum[i];
@@ -654,10 +712,478 @@ function updateViewMulti() {
   $('#scrubLabel').textContent = `punto ${i} / ${state.nPoints - 1}`;
 }
 
+// Avisos compactos: una línea con ⓘ; «Ver más» despliega la lista completa. Los errores se abren desplegados.
 function showBanner(text, err) {
   const b = $('#banner');
-  b.hidden = !text; b.textContent = text; b.className = err ? 'glass err' : 'glass';
+  const items = String(text || '').split('  ·  ').map((t) => t.trim()).filter(Boolean);
+  b.hidden = !items.length;
+  if (!items.length) return;
+  b.className = `toast glass${err ? ' err' : ''}`;
+  b.querySelector('.toast-icon').textContent = err ? '⚠' : 'ⓘ';
+  b.querySelector('.toast-text').textContent = items.length > 1 ? `${items.length} avisos · ${items[0]}` : items[0];
+  b.querySelector('.toast-list').innerHTML = items.map((t) => `<li>${esc(t)}</li>`).join('');
+  setToastExpanded(!!err);
 }
+function setToastExpanded(open) {
+  const b = $('#banner');
+  b.classList.toggle('expanded', open);
+  b.querySelector('.toast-list').hidden = !open;
+  const more = b.querySelector('.toast-more');
+  more.textContent = open ? 'Ver menos' : 'Ver más';
+  more.setAttribute('aria-expanded', String(open));
+}
+$('#banner .toast-more').addEventListener('click', () => setToastExpanded(!$('#banner').classList.contains('expanded')));
+$('#banner .toast-close').addEventListener('click', () => { $('#banner').hidden = true; });
+
+// ------------------------------------------------------- pestañas y paneles plegables
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } },
+};
+function selectTab(name) {
+  for (const t of document.querySelectorAll('.tab')) {
+    const on = t.dataset.tab === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', String(on));
+  }
+  for (const p of document.querySelectorAll('.tabpane')) p.classList.toggle('active', p.dataset.pane === name);
+  store.set('sim.tab', name);
+}
+document.querySelector('.tabs').addEventListener('click', (e) => { if (e.target.dataset.tab) selectTab(e.target.dataset.tab); });
+selectTab(store.get('sim.tab', 'acc'));
+
+function setCollapsed(side, collapsed) {
+  document.body.classList.toggle(`${side}-collapsed`, collapsed);
+  const btn = $(`#${side}Toggle`);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  btn.textContent = (side === 'left') === collapsed ? '›' : '‹';
+  btn.title = collapsed ? 'Desplegar panel' : 'Plegar panel';
+  store.set(`sim.${side}`, collapsed ? '1' : '0');
+}
+for (const side of ['left', 'right']) {
+  $(`#${side}Toggle`).addEventListener('click', () => setCollapsed(side, !document.body.classList.contains(`${side}-collapsed`)));
+  setCollapsed(side, store.get(`sim.${side}`, '0') === '1');
+}
+
+// --------------------------------------------------------------------- gráficas
+let ringInfo = { R: 1, aR: 0.1 };
+const MAX_SERIES_POINTS = 600;
+
+function setChartsOpen(open) {
+  $('#charts').hidden = !open;
+  document.body.classList.toggle('charts-open', open);
+  $('#chartsToggle').setAttribute('aria-expanded', String(open));
+  store.set('sim.charts', open ? '1' : '0');
+  if (open && !charts) {
+    charts = new ChartsPanel({ energy: $('#chEnergy'), power: $('#chPower'), xy: $('#chXY'), coulomb: $('#chCoulomb'),
+      radiated: $('#chRadiated'),
+      coulombEmpty: $('#chCoulombEmpty') });
+    charts.setRing(ringInfo.R, ringInfo.aR);
+  }
+  ui.chartsDirty = true;
+}
+$('#chartsToggle').addEventListener('click', () => setChartsOpen($('#charts').hidden));
+
+// Factor visual del ángulo del cono de radiación (no cambia la física: el ángulo real es 1/γ)
+function setConeX(x) {
+  scene.coneX = x;
+  $('#coneX').value = x;
+  $('#coneXLabel').textContent = `×${x}`;
+  store.set('sim.coneX', String(x));
+  state.shown = -1;
+}
+$('#coneX').addEventListener('input', (e) => setConeX(Number(e.target.value)));
+setConeX(Number(store.get('sim.coneX', '3')) || 3);
+$('#chartsClose').addEventListener('click', () => setChartsOpen(false));
+
+// Reúne los datos ya recibidos del motor hasta el índice i (submuestreados a ~maxPts puntos para dibujar)
+function chartData(i = state.cursor, maxPts = MAX_SERIES_POINTS) {
+  const ix = state.idx;
+  const dtNs = (state.info?.dt_s ?? 0) * 1e9;
+  let rows, upto, color, subject;
+  if (isMulti()) {
+    const k = state.sel, m = state.meta[k];
+    rows = state.detail.rows; upto = Math.min(i, lastValid(k)); color = m.color;
+    subject = `Partícula inspeccionada: ${m.pid} · ${m.species === 'ion' ? m.label : SPECIES[m.species].label}`
+      + ' (energía y potencia) · trayectorias de todas las visibles';
+  } else {
+    rows = state.rows; upto = Math.min(i, rows.length - 1); color = '#7cf5ff';
+    subject = `Partícula individual · ${state.params?.species ?? ''}`;
+  }
+  const stride = Math.max(1, Math.ceil((upto + 1) / maxPts));
+  const ekin = [], power = [], radiated = [], dr = [];
+  const pushRow = (r) => {
+    if (!r) return;                                   // filas de detalle aún no recibidas
+    const t = r[ix.t] * 1e9;
+    ekin.push({ x: t, y: r[ix.ekin_MeV] });
+    power.push({ x: t, y: r[ix.power_W] });
+    radiated.push({ x: t, y: r[ix.radiated_J] / E_CHARGE });
+    dr.push({ x: t, y: r[ix.dr] * 1e3 });
+  };
+  for (let j = 0; j <= upto; j += stride) pushRow(rows[j]);
+  if (upto >= 0 && upto % stride !== 0) pushRow(rows[upto]);   // siempre hasta el instante actual
+
+  const tracks = [];
+  if (isMulti() && scene.multi) {
+    const n = state.meta.length;
+    const per = Math.max(60, Math.min(maxPts, Math.floor((20 * maxPts) / n)));
+    state.meta.forEach((m, k) => {
+      const st = visualStyle(k);
+      if (!st.visible && !st.trail_visible) return;
+      const { buf } = scene.multi.lines[k];
+      const last = Math.min(i, lastValid(k), scene.multi.count[k] - 1);
+      if (last < 0) return;
+      const s = Math.max(1, Math.ceil((last + 1) / per));
+      const pts = [];
+      for (let j = 0; j <= last; j += s) pts.push({ x: buf[3 * j] / scene.k, y: -buf[3 * j + 2] / scene.k });
+      const now = { x: buf[3 * last] / scene.k, y: -buf[3 * last + 2] / scene.k };
+      pts.push(now);
+      const lost = state.status[k]?.lost_step != null && i >= state.status[k].lost_step;
+      tracks.push({ label: m.pid, color: m.color, pts: st.trail_visible ? pts : [], now: lost || !st.visible ? null : now });
+    });
+  } else if (rows.length) {
+    const s = Math.max(1, Math.ceil((upto + 1) / maxPts));
+    const pts = [];
+    for (let j = 0; j <= upto; j += s) pts.push({ x: rows[j][ix.x], y: rows[j][ix.y] });
+    const now = { x: rows[upto][ix.x], y: rows[upto][ix.y] };
+    pts.push(now);
+    tracks.push({ label: 'partícula', color, pts, now });
+  }
+
+  let coulomb = null;
+  if (state.system) {
+    const U = state.system.potential_J;
+    const last = Math.min(i, U.length - 1);
+    const s = Math.max(1, Math.ceil((last + 1) / maxPts));
+    coulomb = [];
+    for (let j = 0; j <= last; j += s) if (U[j] !== undefined) coulomb.push({ x: j * dtNs, y: U[j] / E_CHARGE });
+    if (last >= 0 && U[last] !== undefined) coulomb.push({ x: last * dtNs, y: U[last] / E_CHARGE });
+  }
+  let totals = null;
+  if (state.radiation) {
+    const R = state.radiation;
+    const last = Math.min(i, R.power_W.length - 1);
+    const s = Math.max(1, Math.ceil((last + 1) / maxPts));
+    totals = { power: [], radiated: [] };
+    const push = (j) => {
+      if (R.power_W[j] === undefined) return;
+      totals.power.push({ x: j * dtNs, y: R.power_W[j] });
+      totals.radiated.push({ x: j * dtNs, y: R.radiated_J[j] / E_CHARGE });
+    };
+    for (let j = 0; j <= last; j += s) push(j);
+    if (last >= 0 && last % s !== 0) push(last);
+  }
+  return { series: { ekin, power, radiated, dr, color }, tracks, coulomb, totals, subject };
+}
+
+// Se actualizan como máximo ~4 veces por segundo mientras avanza la simulación, y al pausar/desplazar
+function maybeUpdateCharts(now) {
+  if (!charts || $('#charts').hidden || !state.id) return;
+  if (state.cursor === ui.chartsCursor && !ui.chartsDirty) return;
+  if (now - ui.chartsAt < 250) return;
+  const data = chartData();
+  charts.update(data);
+  $('#chartsSubject').textContent = data.subject;
+  ui.chartsAt = now; ui.chartsCursor = state.cursor; ui.chartsDirty = false;
+}
+// ------------------------------------------------- análisis a pantalla completa + informe descargable
+let analysisCharts = null;
+const AN_POINTS = 2000;
+const MODE_LABEL = { single: 'Partícula individual', multi: 'Múltiples partículas', bunch: 'Bunch de partículas' };
+const lastIndex = () => nRows() - 1;
+const speciesName = (m) => (m.species === 'ion' ? m.label : SPECIES[m.species]?.label ?? m.species);
+
+function updateReportHint() {
+  const done = !!(state.finished || state.lost);
+  const b = $('#analysisOpen');
+  if (done && !b.classList.contains('ready')) b.title = 'Simulación terminada: abre el análisis para descargar el informe';
+  b.classList.toggle('ready', done);
+}
+
+// Garantiza que estén todas las filas de diagnóstico de la partícula inspeccionada hasta el último paso calculado
+async function ensureFullDetail() {
+  if (!isMulti()) return;
+  for (let guard = 0; guard < 40; guard++) {
+    const det = state.detail, need = lastValid(state.sel);
+    if (det.rows[need]) return;
+    let start = 0;
+    while (det.rows[start]) start++;
+    const h = await api.getParticleHistory(state.id, det.pid, start);
+    if (state.detail !== det) continue;               // se cambió de partícula mientras tanto
+    h.rows.forEach((r, j) => { det.rows[h.first_index + j] = r; });
+    if (!h.rows.length) return;
+  }
+}
+
+// Cifras de la simulación hasta el último paso calculado, agrupadas (para la vista y el informe)
+function summaryGroups() {
+  const i = lastIndex(), ix = state.idx, info = state.info, dt = info.dt_s;
+  const multi = isMulti();
+  const rows = multi ? state.detail.rows : state.rows;
+  const kLast = multi ? Math.min(i, lastValid(state.sel)) : i;
+  const r0 = rows[0], rl = rows[kLast];
+  if (!r0 || !rl) return null;
+  const v = (r, n) => r[ix[n]];
+  let maxDr = 0, maxRes = 0;
+  for (let j = 0; j <= kLast; j++) {
+    const r = rows[j];
+    if (!r) continue;
+    maxDr = Math.max(maxDr, Math.abs(v(r, 'dr')));
+    maxRes = Math.max(maxRes, Math.abs(v(r, 'energy_residual')));
+  }
+  const m = multi ? state.meta[state.sel] : null;
+  const ls = multi ? state.status[state.sel]?.lost_step : null;
+  let status;
+  if (multi) {
+    status = state.lost ? 'todas perdidas' : state.finished ? 'completada' : 'en curso';
+  } else {
+    status = state.lost ? `perdida (${state.lostReason}) en el paso ${i}` : state.finished ? 'completada' : 'en curso';
+  }
+  const T0 = v(r0, 'ekin_MeV'), Tf = v(rl, 'ekin_MeV');
+  const radEv = v(rl, 'radiated_J') / E_CHARGE;
+  const { lambda, band } = lightBand(v(rl, 'ecrit_eV'));
+  const loss = multi ? info.particles?.[state.sel]?.rad_loss_per_turn_eV : info.rad_loss_per_turn_eV;
+  const groups = [
+    { title: 'Simulación', items: [
+      ['Modo', MODE_LABEL[state.mode]],
+      ['Pasos calculados', `${i} de ${state.params.n_steps}`],
+      ['Tiempo físico simulado', `${fmt(i * dt * 1e9)} ns`],
+      ['Estado', status],
+      ...(multi ? [['Partículas confinadas al final',
+        `${state.status.filter((s) => s.lost_step == null || i < s.lost_step).length} de ${state.meta.length}`]] : []),
+    ] },
+    { title: multi ? `Partícula ${m.pid} (${speciesName(m)})` : `Partícula (${state.params.species})`, items: [
+      ...(multi && ls != null ? [['Salió de la cámara en el paso', String(ls)]] : []),
+      ['Vueltas', fmt(v(rl, 'turns'), 6)],
+      ['Energía cinética inicial', `${fmt(T0, 8)} MeV`],
+      ['Energía cinética final', `${fmt(Tf, 8)} MeV`],
+      ['Cambio de energía ΔT', `${fmt((Tf - T0) * 1e6)} eV`],
+      ['Máx. desviación |r − R|', `${fmt(maxDr * 1e3)} mm`],
+      ['Máx. residuo ΔT − W (precisión)', fmt(maxRes, 3)],
+    ] },
+    { title: 'Radiación sincrotrón de la partícula', items: [
+      ['Potencia emitida (final)', `${fmt(v(rl, 'power_W'))} W`],
+      ['Energía radiada acumulada', `${fmt(radEv)} eV`],
+      ['Fracción de T radiada (no se resta)', `${fmt((radEv / (Tf * 1e6)) * 100)} %`],
+      ['Pérdida prevista por vuelta', `${fmt(loss)} eV`],
+      ['Energía crítica de los fotones', `${fmt(v(rl, 'ecrit_eV'))} eV`],
+      ['Longitud de onda crítica', lambda ? `${lambdaText(lambda)} (${band})` : '—'],
+      ['Semiángulo del cono 1/γ', `${fmt(1000 / v(rl, 'gamma'))} mrad`],
+    ] },
+  ];
+  const R = state.radiation;
+  if (R && R.power_W[i] !== undefined) {
+    groups.push({ title: 'Radiación total (todas las partículas)', items: [
+      ['Potencia total emitida (final)', `${fmt(R.power_W[i])} W`],
+      ['Energía total radiada', `${fmt(R.radiated_J[i] / E_CHARGE)} eV`],
+      ['Pérdida total prevista por vuelta', `${fmt(info.rad_loss_per_turn_total_pred_eV)} eV`],
+    ] });
+  }
+  const S = state.system;
+  if (S && S.total_J[i] !== undefined) {
+    const it = state.interaction || {};
+    groups.push({ title: 'Interacciones de Coulomb', items: [
+      ['Energía de Coulomb inicial U₀', `${fmt(S.potential_J[0] / E_CHARGE)} eV`],
+      ['Energía de Coulomb final', `${fmt(S.potential_J[i] / E_CHARGE)} eV`],
+      [state.params.rf_voltage_V > 0 ? 'Δ(E_cin + U) (con RF no se conserva)' : 'Δ(E_cin + U) (debe conservarse)',
+        `${fmt((S.total_J[i] - S.total_J[0]) / E_CHARGE)} eV`],
+      ['Distancia mínima entre pares', `${fmt(it.min_pair_distance_m)} m`],
+      ['Subpasos máximos por dt', `${it.max_substeps ?? '—'}${it.unresolved_steps ? ` (${it.unresolved_steps} sin resolver)` : ''}`],
+    ] });
+  }
+  return groups;
+}
+
+function renderAnalysisCards(groups) {
+  $('#anCards').innerHTML = groups.map((g) => `<div class="an-kpi group"><span>${esc(g.title)}</span></div>`
+    + g.items.map(([k, val]) => `<div class="an-kpi"><b>${val}</b><span>${esc(k)}</span></div>`).join('')).join('');
+}
+
+function fillSubjectSelect() {
+  const box = $('#anSubjectBox');
+  box.hidden = !isMulti();
+  if (!isMulti()) return;
+  $('#anSubject').innerHTML = state.meta.map((m, k) =>
+    `<option value="${k}" ${k === state.sel ? 'selected' : ''}>${esc(m.pid)} · ${esc(speciesName(m))}</option>`).join('');
+}
+
+async function refreshAnalysis() {
+  $('#anInfo').textContent = 'Cargando los datos calculados…';
+  await ensureFullDetail();
+  const i = lastIndex();
+  const data = chartData(i, AN_POINTS);
+  analysisCharts.setRing(ringInfo.R, ringInfo.aR);
+  analysisCharts.update(data);
+  const groups = summaryGroups();
+  if (groups) renderAnalysisCards(groups);
+  $('#anInfo').textContent = `${MODE_LABEL[state.mode]} · ${i} pasos calculados (${fmt(i * state.info.dt_s * 1e9)} ns físicos)`
+    + (isMulti() ? ' · trayectorias de todas las partículas visibles' : '');
+}
+
+async function openAnalysis() {
+  if (!state.id || !nRows()) return;
+  state.playing = false; syncPlay();
+  $('#analysis').hidden = false;
+  if (!analysisCharts) {
+    analysisCharts = new ChartsPanel({ energy: $('#anEnergy'), power: $('#anPower'), radiated: $('#anRadiated'),
+      xy: $('#anXY'), coulomb: $('#anCoulomb'), coulombEmpty: $('#anCoulombEmpty'), dr: $('#anDr') });
+  }
+  fillSubjectSelect();
+  try { await refreshAnalysis(); } catch (e) { $('#anInfo').textContent = `Error al cargar los datos: ${e.message}`; }
+  $('#analysisClose').focus();
+}
+function closeAnalysis() { $('#analysis').hidden = true; $('#analysisOpen').focus(); }
+
+$('#analysisOpen').addEventListener('click', openAnalysis);
+$('#analysisClose').addEventListener('click', closeAnalysis);
+$('#anRefresh').addEventListener('click', () => refreshAnalysis());
+$('#anSubject').addEventListener('change', async (e) => { selectParticle(Number(e.target.value)); await refreshAnalysis(); });
+
+const fileStamp = () => new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+
+// Tabla final por partícula (modos múltiple y bunch): estado de todas en el último paso calculado
+async function finalParticleTable() {
+  const i = lastIndex();
+  const p = await api.getPoint(state.id, i);
+  const pred = state.info.particles || [];
+  return {
+    title: 'Partículas: resultado en el último paso calculado',
+    head: ['id', 'especie', 'carga', 'T inicial (MeV)', 'T final (MeV)', 'ΔT (eV)', 'r − R (mm)', 'vueltas',
+      'energía radiada (eV)', 'estado'],
+    rows: p.particles.map((r, k) => {
+      const m = state.meta[k], ls = state.status[k]?.lost_step;
+      const T0 = pred[k]?.ekin_MeV ?? r.ekin_MeV;
+      return [m.pid, speciesName(m), chargeText(Math.round(m.charge_C / E_CHARGE)), fmt(T0, 8), fmt(r.ekin_MeV, 8),
+        fmt((r.ekin_MeV - T0) * 1e6), fmt(r.dr * 1e3), fmt(r.turns, 5), fmt(r.radiated_J / E_CHARGE),
+        ls != null ? `perdida en el paso ${ls}` : 'confinada'];
+    }),
+    note: 'Para una partícula perdida se muestra su estado en el punto en que salió de la cámara.',
+  };
+}
+
+function configSections() {
+  const p = state.params, d = state.info;
+  const val = (k) => (p[k] === null || p[k] === undefined ? 'auto' : String(p[k]));
+  const acc = PARAMS_UI.filter(([k]) => !PART_KEYS.has(k)).map(([k, label]) => [label, val(k)]);
+  const part = PARAMS_UI.filter(([k]) => PART_KEYS.has(k) && !(isMulti() && SINGLE_ONLY.has(k)))
+    .map(([k, label]) => [isMulti() && MULTI_LABELS[k] ? MULTI_LABELS[k] : label, val(k)]);
+  part.unshift(['Modo de simulación', MODE_LABEL[state.mode]]);
+  if (isMulti()) part.push(['Interacciones de Coulomb', p.interactions ? 'activadas' : 'desactivadas']);
+  const groups = [{ title: 'Anillo, campo B y RF', pairs: acc }, { title: 'Partículas', pairs: part }];
+  if (state.mode === 'bunch') {
+    const b = p.bunch;
+    groups.push({ title: 'Bunch', pairs: [['Número de partículas', b.n_particles], ['Especie', b.species],
+      ['Energía central (MeV)', b.central_energy_MeV ?? 'referencia'], ['σ_s longitud (m)', b.sigma_s_m],
+      ['σ_x anchura (m)', b.sigma_x_m], ['σ_z altura (m)', b.sigma_z_m], ['σ_δ (Δp/p)', b.sigma_delta],
+      ['Distribución', b.distribution === 'gaussian' ? 'gaussiana (±3σ)' : 'uniforme (±√3σ)'], ['Semilla', b.seed]] });
+  }
+  const derived = [
+    { title: 'Máquina', pairs: [['B de referencia', `${fmt(d.b_ref_T)} T`], ['B aplicado', `${fmt(d.b_used_T)} T`],
+      ['Radio de curvatura ρ (referencia)', `${fmt(d.rho_m)} m`], ['γ (referencia)', fmt(d.gamma_ref)],
+      ['β (referencia)', fmt(d.beta_ref, 7)], ['Periodo de vuelta', `${fmt(d.t_rev_s * 1e9)} ns`],
+      ['Frecuencia RF', `${fmt(d.f_rf_Hz / 1e6)} MHz`], ['Paso dt', `${fmt(d.dt_s * 1e12)} ps`],
+      ['Tiempo físico programado', `${fmt(d.total_time_s * 1e9)} ns`]] },
+    { title: 'RF y radiación (partícula de referencia)', pairs: [['Ganancia RF por vuelta', `${fmt(d.rf_gain_per_turn_eV)} eV`],
+      ['Factor de tiempo de tránsito', fmt(d.transit_time_factor, 6)], ['Potencia radiada', `${fmt(d.rad_power_ref_W)} W`],
+      ['Pérdida por vuelta (no aplicada)', `${fmt(d.rad_loss_per_turn_eV)} eV`], ['Energía crítica', `${fmt(d.ecrit_ref_eV)} eV`],
+      ['Semiángulo 1/γ', `${fmt(d.cone_half_angle_rad * 1e3)} mrad`]] },
+  ];
+  return [{ title: 'Configuración', groups }, { title: 'Parámetros derivados', groups: derived }];
+}
+
+// Genera el informe en PDF y lo muestra en el visor; descargarlo es opcional (botón del visor)
+async function showReport() {
+  const btn = $('#anReport');
+  btn.disabled = true; btn.textContent = 'Generando PDF…';
+  try {
+    await refreshAnalysis();
+    const groups = summaryGroups() || [];
+    const C = analysisCharts;
+    const charts = [
+      ['Energía cinética vs tiempo', 'Cambio respecto a la energía inicial de la partícula analizada.', C.energy],
+      ['Potencia radiada (Liénard) vs tiempo', 'Partícula analizada y, con varias partículas, el total (línea discontinua).', C.power],
+      ['Energía radiada acumulada vs tiempo', '∫P dt; se calcula pero no se resta a la partícula.', C.radiated],
+      ['Desviación de la órbita r − R vs tiempo', 'Distancia al radio de referencia del anillo.', C.dr],
+      ['Trayectoria X–Y (planta)', 'Órbitas calculadas por el motor; el círculo discontinuo es la guía de radio R.', C.xy],
+      ...(state.system ? [['Energía de Coulomb U vs tiempo', 'Energía potencial electrostática del sistema.', C.coulomb]] : []),
+    ].map(([title, note, chart]) => ({ title, note, img: C.exportImage(chart), w: chart.canvas.width, h: chart.canvas.height }))
+      .filter((c) => c.img);                          // una gráfica sin tamaño en pantalla no se puede copiar
+    const highlights = groups.flatMap((g) => g.items).filter(([k]) => ['Estado', 'Vueltas', 'Cambio de energía ΔT',
+      'Energía radiada acumulada', 'Longitud de onda crítica', 'Máx. desviación |r − R|', 'Partículas confinadas al final',
+      'Energía total radiada'].includes(k)).map(([k, val]) => [val, k]);
+    const ctx = {
+      title: 'Informe de simulación — Sincrotrón 3D',
+      subtitle: `${MODE_LABEL[state.mode]} · sesión ${state.id}`,
+      generated: new Date().toLocaleString('es'),
+      cards: highlights,
+      sections: [...configSections(), { title: 'Resultados', groups: groups.map((g) => ({ title: g.title, pairs: g.items })) }],
+      tables: isMulti() ? [await finalParticleTable()] : [],
+      charts,
+      warnings: state.info.warnings || [],
+      notes: state.info.notes || [],
+      method: [
+        'Ecuaciones: dp/dt = q(E + v × B) (más la fuerza de Coulomb entre partículas si se activa) y dx/dt = p c²/E; '
+          + 'integrador de Boris relativista de segundo orden con un paso dt común para todas las partículas.',
+        'Campos: B vertical uniforme dentro de la cámara de vacío (sin gradiente ni rampa) y campo eléctrico tangencial '
+          + 'en el hueco de la cavidad RF.',
+        'Radiación: potencia de Liénard con la aceleración debida a los campos externos; la energía radiada se calcula '
+          + 'pero no se resta a la partícula (sin reacción de radiación).',
+        'Las predicciones analíticas (radio, confinamiento) suponen B uniforme sin RF ni interacciones.',
+      ],
+    };
+    const { buildReportPDF } = await import('./report_pdf.js');      // se carga sólo al pedir el informe
+    const blob = await buildReportPDF(ctx);
+    openPdfViewer(blob, `informe_sincrotron_${state.mode}_${fileStamp()}.pdf`);
+  } catch (e) {
+    $('#anInfo').textContent = `No se pudo generar el informe: ${e.message}`;
+  } finally {
+    btn.disabled = false; btn.textContent = '📄 Ver informe (PDF)';
+  }
+}
+
+// CSV: una fila por paso con todas las magnitudes de la partícula analizada (+ totales del sistema)
+async function downloadCSV() {
+  await ensureFullDetail();
+  const i = lastIndex();
+  const multi = isMulti();
+  const rows = multi ? state.detail.rows : state.rows;
+  const header = [...state.names];
+  const R = state.radiation, S = state.system;
+  if (R) header.push('P_total_W', 'E_radiada_total_J');
+  if (S) header.push('U_coulomb_J', 'E_cin_total_J', 'E_total_sistema_J');
+  const out = [];
+  for (let j = 0; j <= i; j++) {
+    const r = rows[j] ? [...rows[j]] : [j, j * state.info.dt_s, ...Array(state.names.length - 2).fill(null)];
+    if (R) r.push(R.power_W[j], R.radiated_J[j]);
+    if (S) r.push(S.potential_J[j], S.kinetic_J[j], S.total_J[j]);
+    out.push(r);
+  }
+  const who = multi ? state.meta[state.sel].pid : state.params.species;
+  downloadText(`datos_sincrotron_${state.mode}_${who}_${fileStamp()}.csv`, buildCSV(header, out), 'text/csv');
+}
+$('#anReport').addEventListener('click', showReport);
+
+// ----------------------------------------------------------------- visor del PDF
+const pdf = { blob: null, url: null, name: '' };
+function openPdfViewer(blob, name) {
+  if (pdf.url) URL.revokeObjectURL(pdf.url);
+  pdf.blob = blob; pdf.name = name; pdf.url = URL.createObjectURL(blob);
+  $('#pdfName').textContent = `${name} · ${Math.max(1, Math.round(blob.size / 1024))} KB`;
+  $('#pdfFrame').src = pdf.url;
+  $('#pdfViewer').hidden = false;
+  $('#pdfClose').focus();
+}
+function closePdfViewer() {
+  $('#pdfViewer').hidden = true;
+  $('#pdfFrame').src = 'about:blank';
+  if (pdf.url) { URL.revokeObjectURL(pdf.url); pdf.url = null; }
+  $('#anReport').focus();
+}
+$('#pdfDownload').addEventListener('click', () => { if (pdf.blob) downloadBlob(pdf.name, pdf.blob); });
+$('#pdfOpenTab').addEventListener('click', () => { if (pdf.url) window.open(pdf.url, '_blank', 'noopener'); });
+$('#pdfClose').addEventListener('click', closePdfViewer);
+$('#anCsv').addEventListener('click', () => downloadCSV().catch((e) => { $('#anInfo').textContent = `Error: ${e.message}`; }));
+
 function syncPlay() { $('#play').textContent = state.playing ? 'Pausa' : 'Reproducir'; }
 function updateSpeedLabel() {
   // La velocidad de animación (pasos/s de pantalla) es independiente del tiempo físico: 1 s de pantalla = speed·dt s físicos
@@ -687,6 +1213,8 @@ $('#speed').addEventListener('input', (e) => {
   updateSpeedLabel();
 });
 window.addEventListener('keydown', (e) => {
+  if (!$('#pdfViewer').hidden) { if (e.code === 'Escape') closePdfViewer(); return; }
+  if (!$('#analysis').hidden) { if (e.code === 'Escape') closeAnalysis(); return; }
   const t = e.target;
   if (t.tagName === 'SELECT' || (t.tagName === 'INPUT' && ['number', 'text'].includes(t.type))) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -710,6 +1238,7 @@ function frame(now) {
       if (lastIdx - state.cursor < Math.max(2 * CHUNK, state.speed / 2)) fetchMore(CHUNK);
     }
     if (state.cursor !== state.shown) (isMulti() ? updateViewMulti() : updateView());
+    maybeUpdateCharts(now);
   }
   scene.render();
   requestAnimationFrame(frame);
@@ -723,5 +1252,6 @@ function frame(now) {
     showBanner(`No se pudo conectar con el backend (http://127.0.0.1:8000): ${e.message}`, true);
   }
   $('#speed').dispatchEvent(new Event('input'));
+  if (store.get('sim.charts', '0') === '1') setChartsOpen(true);
   requestAnimationFrame(frame);
 })();

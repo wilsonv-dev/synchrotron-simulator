@@ -4,7 +4,7 @@
     cd backend
     python3 -m venv .venv && source .venv/bin/activate      # opcional
     pip install -r requirements.txt
-    pytest                                                  # 47 pruebas
+    pytest                                                  # 52 pruebas
     python bench_interactions.py                            # coste por paso con 10/50/100 partículas
     uvicorn app.main:app --reload --port 8000
 
@@ -39,3 +39,24 @@ F_ij = q_i q_j (x_i − x_j) / (4π ε0 |x_i − x_j|³), y se suma a q(E + v×B
   (sin campo magnético propio, retardo ni radiación mutua). Para cargas co-móviles con factor γ la fuerza neta real
   es ~1/γ² de la calculada, así que en haces relativistas se sobreestima. Cada partícula es una carga real, no una
   macropartícula: no representa la carga espacial de un bunch real ni otros efectos colectivos.
+
+## Radiación sincrotrón
+- Potencia instantánea de Liénard, P = q²γ⁶/(6π ε0 c³)·[a² − |v×a|²/c²], con la aceleración de los campos externos;
+  en órbita circular coincide con q² c β⁴ γ⁴/(6π ε0 ρ²). Energía radiada = ∫P dt (se calcula, NO se resta).
+- HUD «Radiación»: potencia, energía radiada acumulada, fracción de T, pérdida prevista por vuelta, energía crítica
+  εc = (3/2) ħ c γ³/ρ y su longitud de onda λc = hc/εc (banda de luz), semiángulo 1/γ. En modos múltiple y bunch,
+  además, la potencia y energía radiada TOTAL de todas las partículas (suma incoherente).
+- Gráficas: potencia y energía radiada acumulada de la partícula inspeccionada y del total.
+- Cono 3D: vértice en la partícula, semiángulo 1/γ (× factor visual indicado, «Capas visibles»), largo y brillo según la
+  potencia en una escala logarítmica fija de 10⁻²⁴ W a 10⁻⁸ W: al bajar la energía el cono se abre (1/γ crece) pero se
+  acorta y se atenúa (P ∝ γ⁴). Sólo desaparece si la partícula no emite (fuera del campo o perdida).
+
+## Análisis e informe
+Botón «📄 Análisis e informe» (se resalta al terminar la simulación): vista a pantalla completa con un resumen de cifras
+y 6 gráficas (energía, potencia radiada, energía radiada acumulada, desviación r − R, trayectoria X–Y y energía de
+Coulomb), con selector de partícula en los modos múltiple y bunch. Descargas:
+- **Ver informe (PDF)**: genera en el navegador un PDF A4 (jsPDF, texto vectorial con fuente DejaVu para γ, σ, λ…)
+  con configuración, parámetros derivados, resultados, tabla final por partícula, gráficas, avisos y limitaciones, y lo
+  muestra en un visor dentro de la app. Desde el visor se puede descargar o abrir en otra pestaña; si no, no se guarda.
+- **Datos (CSV)**: una fila por paso con todas las magnitudes de la partícula analizada y, si aplica, los totales de
+  radiación y la energía de Coulomb del sistema (separador coma, punto decimal).
