@@ -12,7 +12,7 @@
   <aside id="panel" class="glass side side-left">
     <header class="side-head">
       <h1 id="title">Sincrotrón · una partícula</h1>
-      <button id="leftToggle" class="icon-btn" type="button" title="Plegar panel" aria-expanded="true" aria-controls="panelBody">‹</button>
+      <button id="leftToggle" class="icon-btn" type="button" title="Plegar panel" aria-expanded="true" aria-controls="panelBody" aria-label="Plegar panel"><span class="ic" data-icon="chevron-left"></span></button>
     </header>
     <div id="panelBody" class="side-body">
       <nav class="tabs" role="tablist">
@@ -91,7 +91,7 @@
   <!-- ============================== Panel derecho: HUD + leyenda -->
   <aside id="right" class="glass side side-right">
     <header class="side-head">
-      <button id="rightToggle" class="icon-btn" type="button" title="Plegar panel" aria-expanded="true" aria-controls="rightBody">›</button>
+      <button id="rightToggle" class="icon-btn" type="button" title="Plegar panel" aria-expanded="true" aria-controls="rightBody" aria-label="Plegar panel"><span class="ic" data-icon="chevron-right"></span></button>
       <div id="status" class="status ok">Confinada</div>
     </header>
     <div id="rightBody" class="side-body">
@@ -110,10 +110,10 @@
 
   <!-- ============================== Avisos: toast compacto con «Ver más» -->
   <div id="banner" class="toast glass" role="status" aria-live="polite" hidden>
-    <span class="toast-icon" aria-hidden="true">ⓘ</span>
+    <span class="toast-icon" data-icon="info" aria-hidden="true"></span>
     <span class="toast-text"></span>
     <button class="toast-more" type="button">Ver más</button>
-    <button class="toast-close icon-btn" type="button" title="Cerrar">×</button>
+    <button class="toast-close icon-btn" type="button" title="Cerrar" aria-label="Cerrar"><span class="ic" data-icon="close"></span></button>
     <ul class="toast-list" hidden></ul>
   </div>
 
@@ -122,7 +122,7 @@
     <div class="charts-head">
       <b>Gráficas</b>
       <span id="chartsSubject" class="dim"></span>
-      <button id="chartsClose" class="icon-btn" type="button" title="Ocultar gráficas">×</button>
+      <button id="chartsClose" class="icon-btn" type="button" title="Ocultar gráficas" aria-label="Ocultar gráficas"><span class="ic" data-icon="close"></span></button>
     </div>
     <div class="charts-grid">
       <figure class="chart-card"><figcaption>Energía cinética vs tiempo</figcaption><div class="chart-box"><canvas id="chEnergy"></canvas></div></figure>
@@ -136,19 +136,19 @@
   <!-- ============================== Barra de reproducción -->
   <footer id="bar" class="glass">
     <!-- en el celular los paneles se abren desde aquí (en escritorio estos dos botones no se muestran) -->
-    <button id="mLeft" class="m-only" type="button" aria-label="Controles" aria-expanded="false" aria-controls="panel"><span class="ic">⚙</span><span class="lbl">Controles</span></button>
-    <button id="play" class="primary" title="Reproducir (Espacio)" aria-label="Reproducir"><span class="ic">▶</span><span class="lbl">Reproducir</span></button>
-    <button id="step" title="Un paso (flecha derecha)" aria-label="Paso +1"><span class="ic">⏭</span><span class="lbl">Paso +1</span></button>
-    <button id="reset" title="Reiniciar (R)" aria-label="Reiniciar"><span class="ic">↺</span><span class="lbl">Reiniciar</span></button>
+    <button id="mLeft" class="m-only" type="button" aria-label="Controles" aria-expanded="false" aria-controls="panel"><span class="ic" data-icon="controls"></span><span class="lbl">Controles</span></button>
+    <button id="play" class="primary" title="Reproducir (Espacio)" aria-label="Reproducir"><span class="ic" data-icon="play"></span><span class="lbl">Reproducir</span></button>
+    <button id="step" title="Un paso (flecha derecha)" aria-label="Paso +1"><span class="ic" data-icon="step"></span><span class="lbl">Paso +1</span></button>
+    <button id="reset" title="Reiniciar (R)" aria-label="Reiniciar"><span class="ic" data-icon="reset"></span><span class="lbl">Reiniciar</span></button>
     <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Punto de la simulación" />
     <span id="scrubLabel">punto 0</span>
     <label class="speed"><span class="lbl">Animación</span>
       <input id="speed" type="range" min="0" max="100" value="55" aria-label="Velocidad de la animación" />
     </label>
     <span id="speedLabel"></span>
-    <button id="chartsToggle" type="button" aria-expanded="false" aria-controls="charts" aria-label="Gráficas"><span class="ic">📈</span><span class="lbl">Gráficas</span></button>
-    <button id="analysisOpen" type="button" title="Gráficas grandes, resumen e informe descargable" aria-label="Análisis e informe"><span class="ic">📄</span><span class="lbl">Análisis e informe</span></button>
-    <button id="mRight" class="m-only" type="button" aria-label="Datos" aria-expanded="false" aria-controls="right"><span class="ic">📊</span><span class="lbl">Datos</span></button>
+    <button id="chartsToggle" type="button" aria-expanded="false" aria-controls="charts" aria-label="Gráficas"><span class="ic" data-icon="charts"></span><span class="lbl">Gráficas</span></button>
+    <button id="analysisOpen" type="button" title="Gráficas grandes, resumen e informe descargable" aria-label="Análisis e informe"><span class="ic" data-icon="report"></span><span class="lbl">Análisis e informe</span></button>
+    <button id="mRight" class="m-only" type="button" aria-label="Datos" aria-expanded="false" aria-controls="right"><span class="ic" data-icon="data"></span><span class="lbl">Datos</span></button>
   </footer>
 
   <!-- ============================== Vista de análisis (pantalla completa) + informe descargable -->
@@ -158,10 +158,10 @@
       <span id="anInfo" class="dim"></span>
       <label id="anSubjectBox" class="an-subject" hidden>Partícula
         <select id="anSubject"></select></label>
-      <button id="anRefresh" type="button" title="Incluir los pasos calculados desde que se abrió">↻ Actualizar</button>
-      <button id="anReport" class="primary" type="button">📄 Ver informe (PDF)</button>
-      <button id="anCsv" type="button">⬇ Datos (CSV)</button>
-      <button id="analysisClose" class="icon-btn" type="button" title="Cerrar (Esc)">×</button>
+      <button id="anRefresh" type="button" title="Incluir los pasos calculados desde que se abrió"><span class="ic" data-icon="refresh"></span>Actualizar</button>
+      <button id="anReport" class="primary" type="button"><span class="ic" data-icon="report"></span><span class="txt">Ver informe (PDF)</span></button>
+      <button id="anCsv" type="button"><span class="ic" data-icon="download"></span>Datos (CSV)</button>
+      <button id="analysisClose" class="icon-btn" type="button" title="Cerrar (Esc)" aria-label="Cerrar"><span class="ic" data-icon="close"></span></button>
     </header>
     <div class="an-body">
       <div id="anCards" class="an-cards"></div>
@@ -188,15 +188,15 @@
     <header class="an-head">
       <h2 id="pdfTitle">Informe de la simulación (PDF)</h2>
       <span id="pdfName" class="dim"></span>
-      <button id="pdfOpenTab" type="button" title="Abrir el PDF en una pestaña nueva del navegador">↗ Abrir en pestaña</button>
-      <button id="pdfDownload" class="primary" type="button">⬇ Descargar PDF</button>
-      <button id="pdfClose" class="icon-btn" type="button" title="Cerrar (Esc)">×</button>
+      <button id="pdfOpenTab" type="button" title="Abrir el PDF en una pestaña nueva del navegador"><span class="ic" data-icon="external"></span>Abrir en pestaña</button>
+      <button id="pdfDownload" class="primary" type="button"><span class="ic" data-icon="download"></span>Descargar PDF</button>
+      <button id="pdfClose" class="icon-btn" type="button" title="Cerrar (Esc)" aria-label="Cerrar"><span class="ic" data-icon="close"></span></button>
     </header>
     <iframe id="pdfFrame" title="Vista previa del informe en PDF"></iframe>
     <div id="pdfMobile" class="pdf-mobile">
       <p>El informe está listo. En el celular se ve mejor abriéndolo con el visor de PDF del teléfono.</p>
-      <button id="pdfOpenTab2" class="primary" type="button">↗ Abrir PDF</button>
-      <button id="pdfDownload2" type="button">⬇ Descargar</button>
+      <button id="pdfOpenTab2" class="primary" type="button"><span class="ic" data-icon="external"></span>Abrir PDF</button>
+      <button id="pdfDownload2" type="button"><span class="ic" data-icon="download"></span>Descargar</button>
     </div>
   </section>
 

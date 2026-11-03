@@ -1,10 +1,12 @@
 import './style.css';
 import { SynchrotronScene } from './scene.js';
 import { ChartsPanel } from './charts.js';
+import { renderIcons, setIcon } from './icons.js';
 import { buildCSV, downloadBlob, downloadText } from './report.js';
 import * as api from './api.js';
 
 const $ = (s) => document.querySelector(s);
+renderIcons();                                       // iconos SVG de los botones (data-icon)
 const CHUNK = 250;                                   // pasos que se piden al motor de Python por lote
 const E_CHARGE = 1.602176634e-19;
 
@@ -749,14 +751,14 @@ function updateViewMulti() {
   $('#scrubLabel').textContent = `punto ${i} / ${state.nPoints - 1}`;
 }
 
-// Avisos compactos: una línea con ⓘ; «Ver más» despliega la lista completa. Los errores se abren desplegados.
+// Avisos compactos: una línea con un icono de información; «Ver más» despliega la lista completa. Los errores se abren desplegados.
 function showBanner(text, err) {
   const b = $('#banner');
   const items = String(text || '').split('  ·  ').map((t) => t.trim()).filter(Boolean);
   b.hidden = !items.length;
   if (!items.length) return;
   b.className = `toast glass${err ? ' err' : ''}`;
-  b.querySelector('.toast-icon').textContent = err ? '⚠' : 'ⓘ';
+  setIcon(b.querySelector('.toast-icon'), err ? 'alert' : 'info');
   b.querySelector('.toast-text').textContent = items.length > 1 ? `${items.length} avisos · ${items[0]}` : items[0];
   b.querySelector('.toast-list').innerHTML = items.map((t) => `<li>${esc(t)}</li>`).join('');
   setToastExpanded(!!err);
@@ -793,7 +795,7 @@ function setCollapsed(side, collapsed) {
   document.body.classList.toggle(`${side}-collapsed`, collapsed);
   const btn = $(`#${side}Toggle`);
   btn.setAttribute('aria-expanded', String(!collapsed));
-  btn.textContent = (side === 'left') === collapsed ? '›' : '‹';
+  setIcon(btn, (side === 'left') === collapsed ? 'chevron-right' : 'chevron-left');
   btn.title = collapsed ? 'Desplegar panel' : 'Plegar panel';
   store.set(`sim.${side}`, collapsed ? '1' : '0');
 }
@@ -1143,7 +1145,7 @@ function configSections() {
 // Genera el informe en PDF y lo muestra en el visor; descargarlo es opcional (botón del visor)
 async function showReport() {
   const btn = $('#anReport');
-  btn.disabled = true; btn.textContent = 'Generando PDF…';
+  btn.disabled = true; btn.querySelector('.txt').textContent = 'Generando PDF…';
   try {
     await refreshAnalysis();
     const groups = summaryGroups() || [];
@@ -1186,7 +1188,7 @@ async function showReport() {
   } catch (e) {
     $('#anInfo').textContent = `No se pudo generar el informe: ${e.message}`;
   } finally {
-    btn.disabled = false; btn.textContent = '📄 Ver informe (PDF)';
+    btn.disabled = false; btn.querySelector('.txt').textContent = 'Ver informe (PDF)';
   }
 }
 
@@ -1240,7 +1242,7 @@ $('#anCsv').addEventListener('click', () => downloadCSV().catch((e) => { $('#anI
 
 function syncPlay() {
   const label = state.playing ? 'Pausa' : 'Reproducir';
-  $('#play .ic').textContent = state.playing ? '❚❚' : '▶';
+  setIcon($('#play .ic'), state.playing ? 'pause' : 'play');
   $('#play .lbl').textContent = label;
   $('#play').setAttribute('aria-label', label);
   state.shown = -1;                                   // al pausar se refresca todo el panel de datos

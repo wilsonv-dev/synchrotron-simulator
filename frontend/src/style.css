@@ -270,3 +270,12 @@ body.left-collapsed .side-left .side-head, body.right-collapsed .side-right .sid
 .pdf-mobile button { margin: 4px; min-width: 140px; height: 42px; }
 #pdfViewer.no-embed #pdfFrame { display: none; }
 #pdfViewer.no-embed .pdf-mobile { display: block; }
+
+/* --------------------------------------------------------------- iconos SVG */
+.icon { width: 16px; height: 16px; stroke-width: 2; flex: none; display: block; }
+.ic { display: inline-flex; align-items: center; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.icon-btn .icon { width: 16px; height: 16px; }
+.toast-icon { display: inline-flex; } .toast-icon .icon { width: 17px; height: 17px; }
+#play .icon { fill: currentColor; stroke-width: 1.5; }     /* reproducir/pausa rellenos, como en un reproductor */
+@media (max-width: 760px) { #bar .icon { width: 20px; height: 20px; } }

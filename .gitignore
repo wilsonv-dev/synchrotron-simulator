@@ -12,3 +12,6 @@ frontend/dist/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Configuración local de Claude Code (no se sube)
+.claude/
